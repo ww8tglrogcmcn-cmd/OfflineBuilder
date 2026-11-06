@@ -685,6 +685,27 @@ public final class OfflineBuilderClient implements ClientModInitializer {
         return hit;
     }
 
+    /**
+     * Moves an item from the main inventory into an empty hotbar slot using a normal
+     * inventory SWAP transaction. No existing hotbar item is overwritten.
+     */
+    private static int moveInventoryItemToFreeHotbar(Minecraft client, int sourceSlot) {
+        if (client == null || client.player == null || client.gameMode == null
+                || client.player.containerMenu != client.player.inventoryMenu) return -1;
+        for (int hotbarSlot = 0; hotbarSlot < 9; hotbarSlot++) {
+            if (client.player.getInventory().getItem(hotbarSlot).isEmpty()) {
+                client.gameMode.handleInventoryMouseClick(
+                        client.player.inventoryMenu.containerId,
+                        sourceSlot,
+                        hotbarSlot,
+                        net.minecraft.world.inventory.ClickType.SWAP,
+                        client.player);
+                return hotbarSlot;
+            }
+        }
+        return -1;
+    }
+
     /** Creates connected block shapes and orders them from an anchor outwards. */
     private static final class ShapePlanner {
         static List<BlockPos> create(BlockPos base, Direction facing) {
@@ -1023,20 +1044,40 @@ public final class OfflineBuilderClient implements ClientModInitializer {
         }
 
         private static int bestPickaxeSlot(Minecraft client, BlockState state) {
-            int best = -1;
-            float bestSpeed = 0.0F;
+            int bestHotbar = -1;
+            float bestHotbarSpeed = 0.0F;
             for (int slot = 0; slot < 9; slot++) {
                 var stack = client.player.getInventory().getItem(slot);
                 if (stack.isEmpty()) continue;
                 var itemId = BuiltInRegistries.ITEM.getKey(stack.getItem());
                 if (itemId == null || !itemId.getPath().endsWith("_pickaxe")) continue;
                 float speed = stack.getDestroySpeed(state);
-                if (speed > bestSpeed) {
-                    bestSpeed = speed;
-                    best = slot;
+                if (speed > bestHotbarSpeed) {
+                    bestHotbarSpeed = speed;
+                    bestHotbar = slot;
                 }
             }
-            return best;
+
+            if (client.player.containerMenu == client.player.inventoryMenu) {
+                int bestInventory = -1;
+                float bestInventorySpeed = bestHotbarSpeed;
+                for (int slot = 9; slot < 36; slot++) {
+                    var stack = client.player.getInventory().getItem(slot);
+                    if (stack.isEmpty()) continue;
+                    var itemId = BuiltInRegistries.ITEM.getKey(stack.getItem());
+                    if (itemId == null || !itemId.getPath().endsWith("_pickaxe")) continue;
+                    float speed = stack.getDestroySpeed(state);
+                    if (speed > bestInventorySpeed) {
+                        bestInventorySpeed = speed;
+                        bestInventory = slot;
+                    }
+                }
+                if (bestInventory >= 0) {
+                    int moved = moveInventoryItemToFreeHotbar(client, bestInventory);
+                    if (moved >= 0) return moved;
+                }
+            }
+            return bestHotbar;
         }
 
         private static void finish(Minecraft client, String message) {
@@ -1156,7 +1197,8 @@ public final class OfflineBuilderClient implements ClientModInitializer {
             if (materialSlot < 0) {
                 paused = true;
                 state = "Pausiert: " + selectedBlock.getName().getString()
-                        + " fehlt in der Hotbar. Lege den Block dort ab und druecke Weiter.";
+                        + " fehlt in der Hotbar oder es ist kein freier Hotbar-Slot vorhanden. "
+                        + "Fuege Material hinzu oder mache einen Slot frei und druecke Weiter.";
                 return;
             }
             if (materialSlot != client.player.getInventory().getSelectedSlot()) {
@@ -1336,6 +1378,14 @@ public final class OfflineBuilderClient implements ClientModInitializer {
             for (int slot = 0; slot < 9; slot++) {
                 var stack = client.player.getInventory().getItem(slot);
                 if (!stack.isEmpty() && stack.getItem() == selectedBlock.asItem()) return slot;
+            }
+            if (client.player.containerMenu == client.player.inventoryMenu) {
+                for (int slot = 9; slot < 36; slot++) {
+                    var stack = client.player.getInventory().getItem(slot);
+                    if (!stack.isEmpty() && stack.getItem() == selectedBlock.asItem()) {
+                        return moveInventoryItemToFreeHotbar(client, slot);
+                    }
+                }
             }
             return -1;
         }
