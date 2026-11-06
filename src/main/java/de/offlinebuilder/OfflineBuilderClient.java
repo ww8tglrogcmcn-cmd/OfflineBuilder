@@ -9,6 +9,7 @@ import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -50,6 +51,7 @@ public final class OfflineBuilderClient implements ClientModInitializer {
             .filter(block -> block.asItem() != net.minecraft.world.item.Items.AIR)
             .toList();
     private static int materialIndex = 0;
+    private static String materialSearch = "";
 
     private static Shape shape = Shape.WALL;
     private static int width = 8;
@@ -176,15 +178,17 @@ public final class OfflineBuilderClient implements ClientModInitializer {
 
     private static int materialIndex(String token) {
         String key = token.toLowerCase(Locale.ROOT).replace('-', '_');
-        String[] names = {"stone_bricks", "cobblestone", "oak_planks", "bricks", "glass", "smooth_stone", "stone"};
-        for (int i = 0; i < names.length; i++) if (names[i].equals(key)) return i;
+        for (int i = 0; i < MATERIALS.size(); i++) {
+            var id = BuiltInRegistries.BLOCK.getKey(MATERIALS.get(i));
+            if (id != null && (id.toString().equals(key) || id.getPath().equals(key))) return i;
+        }
         return -1;
     }
 
     private static void tell(Minecraft client, String message) {
         uiStatus = message;
         BuildEngine.state = message;
-        if (client.player != null) client.gui.setScreen(new BuilderScreen());
+        if (client.player != null) client.player.displayClientMessage(Component.literal("[OfflineBuilder] " + message), false);
     }
 
     private enum Shape {
@@ -199,6 +203,50 @@ public final class OfflineBuilderClient implements ClientModInitializer {
         final String label;
         Shape(String label) { this.label = label; }
         Shape next() { return values()[(ordinal() + 1) % values().length]; }
+    }
+
+
+    private static final class MaterialScreen extends Screen {
+        private final Screen parent;
+        private EditBox search;
+        private int page = 0;
+        private static final int PAGE_SIZE = 8;
+        MaterialScreen(Screen parent) { super(Component.literal("OfflineBuilder - Material")); this.parent = parent; }
+        private List<Block> matches() {
+            String q = search == null ? materialSearch : search.getValue().toLowerCase(Locale.ROOT).trim();
+            return MATERIALS.stream().filter(block -> {
+                var id = BuiltInRegistries.BLOCK.getKey(block);
+                String key = id == null ? "" : id.toString();
+                return q.isEmpty() || key.contains(q) || block.getName().getString().toLowerCase(Locale.ROOT).contains(q);
+            }).toList();
+        }
+        @Override protected void init() {
+            int w = Math.max(160, Math.min(360, width - 24)), left = (width - w) / 2;
+            search = new EditBox(font, left, 34, w, 20, Component.literal("Block suchen"));
+            search.setValue(materialSearch);
+            search.setResponder(value -> { materialSearch = value; page = 0; rebuildWidgets(); });
+            addRenderableWidget(search);
+            List<Block> found = matches();
+            int pages = Math.max(1, (found.size() + PAGE_SIZE - 1) / PAGE_SIZE);
+            page = Math.min(page, pages - 1);
+            for (int i = page * PAGE_SIZE; i < Math.min(found.size(), (page + 1) * PAGE_SIZE); i++) {
+                Block block = found.get(i); int index = MATERIALS.indexOf(block);
+                String id = String.valueOf(BuiltInRegistries.BLOCK.getKey(block));
+                addRenderableWidget(Button.builder(Component.literal(block.getName().getString() + " [" + id + "]"), b -> {
+                    materialIndex = index; minecraft.setScreen(parent);
+                }).bounds(left, 62 + (i - page * PAGE_SIZE) * 26, w, 22).build());
+            }
+            addRenderableWidget(Button.builder(Component.literal("<"), b -> { page = Math.max(0,page-1); rebuildWidgets(); }).bounds(left, height-55, 40, 20).build());
+            addRenderableWidget(Button.builder(Component.literal("Seite " + (page+1) + "/" + pages + " - " + found.size() + " Treffer"), b -> {}).bounds(left+44,height-55,w-88,20).build());
+            addRenderableWidget(Button.builder(Component.literal(">"), b -> { page = Math.min(pages-1,page+1); rebuildWidgets(); }).bounds(left+w-40,height-55,40,20).build());
+            addRenderableWidget(Button.builder(Component.literal("Zurueck"), b -> minecraft.setScreen(parent)).bounds(left,height-28,w,20).build());
+            setInitialFocus(search);
+        }
+        @Override public void extractRenderState(GuiGraphicsExtractor graphics,int mouseX,int mouseY,float delta) {
+            super.extractRenderState(graphics,mouseX,mouseY,delta);
+            graphics.centeredText(font,title,width/2,12,0xFFFFFFFF);
+        }
+        @Override public boolean isPauseScreen() { return false; }
     }
 
     private static final class BuilderScreen extends Screen {
@@ -231,11 +279,8 @@ public final class OfflineBuilderClient implements ClientModInitializer {
             y += 30;
 
             addRenderableWidget(Button.builder(
-                    Component.literal("Material: " + MATERIALS.get(Math.floorMod(materialIndex, MATERIALS.size())).getName().getString() + "  ›"),
-                    b -> {
-                        materialIndex = (materialIndex + 1) % MATERIALS.size();
-                        rebuildWidgets();
-                    }).bounds(left, y, panelWidth, 20).build());
+                    Component.literal("Material suchen / auswaehlen  (" + MATERIALS.size() + ")"),
+                    b -> this.minecraft.setScreen(new MaterialScreen(this))).bounds(left, y, panelWidth, 20).build());
             y += 27;
 
             addRenderableWidget(Button.builder(
