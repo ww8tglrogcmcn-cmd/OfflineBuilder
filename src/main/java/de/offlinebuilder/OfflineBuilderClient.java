@@ -1,65 +1,461 @@
 package de.offlinebuilder;
 
+import com.mojang.blaze3d.platform.InputConstants;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
-import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
+import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.GuiGraphicsExtractor;
+import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.network.chat.Component;
-import com.mojang.blaze3d.platform.InputConstants;
-import org.lwjgl.glfw.GLFW;
+import net.minecraft.resources.Identifier;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.InteractionResult;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.HitResult;
+import net.minecraft.world.phys.Vec3;
 
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Queue;
+import java.util.Set;
+
+/**
+ * OfflineBuilder client entry point.
+ *
+ * All world changes are sent through Minecraft's normal block-use interaction. The mod
+ * does not write blocks directly into the client world and does not bypass server rules.
+ */
 public final class OfflineBuilderClient implements ClientModInitializer {
+    private static final KeyMapping.Category CATEGORY =
+            KeyMapping.Category.register(Identifier.fromNamespaceAndPath("offlinebuilder", "main"));
     private static KeyMapping openMenuKey;
+
+    private static final Block[] MATERIALS = {
+            Blocks.STONE_BRICKS, Blocks.COBBLESTONE, Blocks.OAK_PLANKS,
+            Blocks.BRICKS, Blocks.GLASS, Blocks.SMOOTH_STONE
+    };
+    private static int materialIndex = 0;
+
+    private static Shape shape = Shape.WALL;
+    private static int width = 8;
+    private static int length = 8;
+    private static int height = 4;
+    private static boolean hollow = false;
+    private static String uiStatus = "Bereit. B druecken, um OfflineBuilder zu oeffnen.";
 
     @Override
     public void onInitializeClient() {
-        openMenuKey = KeyBindingHelper.registerKeyBinding(new KeyMapping(
-            "key.offlinebuilder.open",
-            InputConstants.Type.KEYSYM,
-            GLFW.GLFW_KEY_B,
-            "category.offlinebuilder"
-        ));
+        openMenuKey = KeyMappingHelper.registerKeyMapping(new KeyMapping(
+                "key.offlinebuilder.open", InputConstants.KEY_B, CATEGORY));
 
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             while (openMenuKey.consumeClick()) {
-                if (client.screen == null) {
-                    client.setScreen(new BuilderScreen());
+                if (client.gui.screen() == null) {
+                    client.gui.setScreen(new BuilderScreen());
                 }
             }
+            BuildEngine.tick(client);
         });
     }
 
+    private enum Shape {
+        WALL("Wand"),
+        FLOOR("Boden"),
+        CUBOID("Quader"),
+        SPHERE("Kugel"),
+        DOME("Kuppel"),
+        CYLINDER("Zylinder"),
+        PYRAMID("Pyramide");
+
+        final String label;
+        Shape(String label) { this.label = label; }
+        Shape next() { return values()[(ordinal() + 1) % values().length]; }
+    }
+
     private static final class BuilderScreen extends Screen {
-        protected BuilderScreen() {
+        private static final int PANEL_WIDTH = 330;
+
+        BuilderScreen() {
             super(Component.literal("OfflineBuilder"));
         }
 
         @Override
         protected void init() {
-            int buttonWidth = 150;
-            int left = (this.width - buttonWidth) / 2;
-            int top = this.height / 2 - 10;
-            this.addRenderableWidget(net.minecraft.client.gui.components.Button.builder(
-                Component.literal("Schließen"),
-                button -> this.onClose()
-            ).bounds(left, top, buttonWidth, 20).build());
+            int left = (this.width - PANEL_WIDTH) / 2;
+            int y = Math.max(32, this.height / 2 - 122);
+
+            addRenderableWidget(Button.builder(Component.literal("Form: " + shape.label + "  ›"), b -> {
+                shape = shape.next();
+                rebuildWidgets();
+            }).bounds(left, y, PANEL_WIDTH, 20).build());
+            y += 28;
+
+            addDimensionRow(left, y, "Breite", 0);
+            y += 27;
+            addDimensionRow(left, y, "Laenge", 1);
+            y += 27;
+            addDimensionRow(left, y, "Hoehe", 2);
+            y += 30;
+
+            addRenderableWidget(Button.builder(
+                    Component.literal("Material: " + MATERIALS[materialIndex].getName().getString() + "  ›"),
+                    b -> {
+                        materialIndex = (materialIndex + 1) % MATERIALS.length;
+                        rebuildWidgets();
+                    }).bounds(left, y, PANEL_WIDTH, 20).build());
+            y += 27;
+
+            addRenderableWidget(Button.builder(
+                    Component.literal(hollow ? "Bauweise: Hohl" : "Bauweise: Gefuellt"),
+                    b -> {
+                        hollow = !hollow;
+                        rebuildWidgets();
+                    }).bounds(left, y, PANEL_WIDTH, 20).build());
+            y += 30;
+
+            addRenderableWidget(Button.builder(Component.literal("Vorschau berechnen"), b -> {
+                if (this.minecraft == null || this.minecraft.player == null) {
+                    uiStatus = "Dazu musst du in einer Welt sein.";
+                } else {
+                    BlockHitResult hit = currentBlockHit(this.minecraft);
+                    if (hit == null) {
+                        uiStatus = "Schau auf einen Block, an den gebaut werden kann.";
+                    } else {
+                        List<BlockPos> plan = ShapePlanner.create(
+                                hit.getBlockPos().relative(hit.getDirection()),
+                                this.minecraft.player.getDirection());
+                        uiStatus = "Vorschau: " + plan.size() + " Bloecke. Noch nichts gesetzt.";
+                    }
+                }
+            }).bounds(left, y, PANEL_WIDTH, 20).build());
+            y += 27;
+
+            addRenderableWidget(Button.builder(Component.literal("Bau starten"), b -> {
+                BuildEngine.start(this.minecraft);
+            }).bounds(left, y, PANEL_WIDTH, 20).build());
+            y += 27;
+
+            int gap = 5;
+            int half = (PANEL_WIDTH - gap) / 2;
+            addRenderableWidget(Button.builder(Component.literal("Pause / Weiter"), b -> {
+                BuildEngine.togglePause();
+            }).bounds(left, y, half, 20).build());
+            addRenderableWidget(Button.builder(Component.literal("Abbrechen"), b -> {
+                BuildEngine.cancel();
+            }).bounds(left + half + gap, y, half, 20).build());
+        }
+
+        private void addDimensionRow(int left, int y, String label, int which) {
+            int value = which == 0 ? width : which == 1 ? length : height;
+            int third = PANEL_WIDTH / 3;
+            addRenderableWidget(Button.builder(Component.literal(label + "  −"), b -> {
+                changeDimension(which, -1);
+                rebuildWidgets();
+            }).bounds(left, y, third - 3, 20).build());
+            addRenderableWidget(Button.builder(Component.literal(value + "  +"), b -> {
+                changeDimension(which, 1);
+                rebuildWidgets();
+            }).bounds(left + third, y, third - 3, 20).build());
+            addRenderableWidget(Button.builder(Component.literal(" + " + label), b -> {
+                changeDimension(which, 1);
+                rebuildWidgets();
+            }).bounds(left + third * 2, y, third, 20).build());
+        }
+
+        private void changeDimension(int which, int delta) {
+            if (which == 0) width = clamp(width + delta, 1, 48);
+            if (which == 1) length = clamp(length + delta, 1, 48);
+            if (which == 2) height = clamp(height + delta, 1, 48);
         }
 
         @Override
-        public void render(net.minecraft.client.gui.GuiGraphics graphics, int mouseX, int mouseY, float delta) {
-            this.renderBackground(graphics, mouseX, mouseY, delta);
-            graphics.drawCenteredString(this.font, this.title, this.width / 2, this.height / 2 - 55, 0xFFFFFF);
-            graphics.drawCenteredString(this.font,
-                Component.literal("Offline-Bauwerkzeuge – Grundversion"),
-                this.width / 2, this.height / 2 - 30, 0xA8DCE8);
-            super.render(graphics, mouseX, mouseY, delta);
+        public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float delta) {
+            super.extractRenderState(graphics, mouseX, mouseY, delta);
+            graphics.centeredText(this.font, this.title, this.width / 2, 12, 0xFFFFFFFF);
+            graphics.centeredText(this.font,
+                    Component.literal("Breite: " + width + "   Laenge: " + length + "   Hoehe: " + height),
+                    this.width / 2, this.height / 2 - 94, 0xFFB9DCE8);
+            graphics.centeredText(this.font,
+                    Component.literal("Block: " + MATERIALS[materialIndex].getName().getString()),
+                    this.width / 2, this.height / 2 + 48, 0xFFB9DCE8);
+            graphics.centeredText(this.font,
+                    Component.literal(BuildEngine.status()),
+                    this.width / 2, this.height - 24, 0xFFFFFFFF);
+            graphics.centeredText(this.font,
+                    Component.literal("Halte den passenden Block in der Haupthand."),
+                    this.width / 2, this.height - 38, 0xFFAAAAAA);
         }
 
         @Override
         public boolean isPauseScreen() {
             return false;
+        }
+    }
+
+    private static int clamp(int value, int min, int max) {
+        return Math.max(min, Math.min(max, value));
+    }
+
+    private static BlockHitResult currentBlockHit(Minecraft client) {
+        if (client == null || !(client.hitResult instanceof BlockHitResult hit)
+                || hit.getType() != HitResult.Type.BLOCK) return null;
+        return hit;
+    }
+
+    /** Creates connected block shapes and orders them from an anchor outwards. */
+    private static final class ShapePlanner {
+        static List<BlockPos> create(BlockPos base, Direction facing) {
+            Direction forward = facing.getAxis().isHorizontal() ? facing : Direction.SOUTH;
+            Direction right = forward.getClockWise();
+            Set<BlockPos> all = new HashSet<>();
+
+            int r = Math.max(1, width / 2);
+            switch (shape) {
+                case WALL -> {
+                    for (int y = 0; y < height; y++)
+                        for (int x = 0; x < width; x++)
+                            add(all, base, right, forward, x, y, 0);
+                }
+                case FLOOR -> {
+                    for (int z = 0; z < length; z++)
+                        for (int x = 0; x < width; x++)
+                            add(all, base, right, forward, x, 0, z);
+                }
+                case CUBOID -> {
+                    for (int y = 0; y < height; y++)
+                        for (int z = 0; z < length; z++)
+                            for (int x = 0; x < width; x++) {
+                                boolean edge = x == 0 || x == width - 1 || z == 0
+                                        || z == length - 1 || y == 0 || y == height - 1;
+                                if (!hollow || edge) add(all, base, right, forward, x, y, z);
+                            }
+                }
+                case SPHERE -> {
+                    for (int y = 0; y <= 2 * r; y++)
+                        for (int z = -r; z <= r; z++)
+                            for (int x = -r; x <= r; x++) {
+                                int dx = x, dy = y - r, dz = z;
+                                int d2 = dx * dx + dy * dy + dz * dz;
+                                boolean edge = d2 >= (r - 1) * (r - 1) || y == 0 || y == 2 * r;
+                                if (d2 <= r * r && (!hollow || edge))
+                                    add(all, base, right, forward, x, y, z);
+                            }
+                }
+                case DOME -> {
+                    for (int y = 0; y <= r; y++)
+                        for (int z = -r; z <= r; z++)
+                            for (int x = -r; x <= r; x++) {
+                                int d2 = x * x + y * y + z * z;
+                                boolean edge = d2 >= (r - 1) * (r - 1) || y == 0;
+                                if (d2 <= r * r && (!hollow || edge))
+                                    add(all, base, right, forward, x, y, z);
+                            }
+                }
+                case CYLINDER -> {
+                    for (int y = 0; y < height; y++)
+                        for (int z = -r; z <= r; z++)
+                            for (int x = 0; x <= 2 * r; x++) {
+                                int dx = x - r;
+                                int d2 = dx * dx + z * z;
+                                boolean edge = d2 >= (r - 1) * (r - 1)
+                                        || y == 0 || y == height - 1;
+                                if (d2 <= r * r && (!hollow || edge))
+                                    add(all, base, right, forward, x - r, y, z);
+                            }
+                }
+                case PYRAMID -> {
+                    for (int y = 0; y < height; y++) {
+                        int inset = hollow ? y : y;
+                        int xMax = Math.max(0, width - 1 - inset * 2);
+                        int zMax = Math.max(0, length - 1 - inset * 2);
+                        for (int z = 0; z <= zMax; z++)
+                            for (int x = 0; x <= xMax; x++) {
+                                boolean edge = x == 0 || z == 0 || x == xMax || z == zMax;
+                                if (!hollow || edge)
+                                    add(all, base, right, forward, x + inset, y, z + inset);
+                            }
+                    }
+                }
+            }
+
+            // Build a breadth-first path. Every block after the first touches an earlier block.
+            Queue<BlockPos> queue = new ArrayDeque<>();
+            Set<BlockPos> seen = new LinkedHashSet<>();
+            if (!all.contains(base)) return List.of();
+            queue.add(base);
+            seen.add(base);
+            List<BlockPos> ordered = new ArrayList<>(all.size());
+            while (!queue.isEmpty()) {
+                BlockPos current = queue.remove();
+                ordered.add(current);
+                for (Direction direction : Direction.values()) {
+                    BlockPos next = current.relative(direction);
+                    if (all.contains(next) && seen.add(next)) queue.add(next);
+                }
+            }
+            return ordered.size() == all.size() ? ordered : List.of();
+        }
+
+        private static void add(Set<BlockPos> positions, BlockPos base, Direction right,
+                                Direction forward, int x, int y, int z) {
+            int dx = right.getStepX() * x + forward.getStepX() * z;
+            int dz = right.getStepZ() * x + forward.getStepZ() * z;
+            positions.add(base.offset(dx, y, dz));
+        }
+    }
+
+    /** Places one block every few ticks, exclusively through vanilla block interaction. */
+    private static final class BuildEngine {
+        private static final Queue<BlockPos> remaining = new ArrayDeque<>();
+        private static final Set<BlockPos> placed = new LinkedHashSet<>();
+        private static BlockPos originalAnchor;
+        private static Direction originalFace;
+        private static Block selectedBlock = Blocks.STONE_BRICKS;
+        private static int total;
+        private static int tickDelay;
+        private static boolean paused;
+        private static String state = "Bereit";
+
+        static void start(Minecraft client) {
+            if (client == null || client.player == null || client.level == null || client.gameMode == null) {
+                state = "Du musst in einer Welt sein.";
+                return;
+            }
+            if (!remaining.isEmpty()) {
+                state = "Es laeuft bereits ein Bauvorgang.";
+                return;
+            }
+            BlockHitResult hit = currentBlockHit(client);
+            if (hit == null) {
+                state = "Schau zuerst auf einen festen Block.";
+                return;
+            }
+            BlockPos base = hit.getBlockPos().relative(hit.getDirection());
+            if (!client.level.getBlockState(base).isAir()) {
+                state = "Der Startplatz ist nicht frei.";
+                return;
+            }
+
+            selectedBlock = MATERIALS[materialIndex];
+            List<BlockPos> plan = ShapePlanner.create(base, client.player.getDirection());
+            if (plan.isEmpty()) {
+                state = "Diese Form konnte nicht geplant werden.";
+                return;
+            }
+            if (plan.size() > 12000) {
+                state = "Zu gross: maximal 12.000 Bloecke pro Bau.";
+                return;
+            }
+            remaining.clear();
+            remaining.addAll(plan);
+            placed.clear();
+            originalAnchor = hit.getBlockPos();
+            originalFace = hit.getDirection();
+            total = plan.size();
+            tickDelay = 0;
+            paused = false;
+            state = "Bau laeuft: 0 / " + total;
+        }
+
+        static void tick(Minecraft client) {
+            if (remaining.isEmpty() || paused || client == null || client.player == null
+                    || client.level == null || client.gameMode == null) return;
+            if (++tickDelay < 2) return;
+            tickDelay = 0;
+
+            BlockPos target = remaining.peek();
+            if (target == null) return;
+            int y = target.getY();
+            if (y < client.level.getMinY() || y >= client.level.getMaxY()) {
+                cancelWith("Abgebrochen: ausserhalb der Bauhoehe.");
+                return;
+            }
+            if (!client.level.getBlockState(target).isAir()) {
+                cancelWith("Abgebrochen: Zielbereich ist nicht frei bei " + target.toShortString());
+                return;
+            }
+
+            if (client.player.getMainHandItem().isEmpty()
+                    || client.player.getMainHandItem().getItem() != selectedBlock.asItem()) {
+                cancelWith("Pausiert: " + selectedBlock.getName().getString()
+                        + " in die Haupthand legen und Bau erneut starten.");
+                return;
+            }
+
+            BlockPos anchor = null;
+            Direction face = null;
+            if (placed.isEmpty()) {
+                anchor = originalAnchor;
+                face = originalFace;
+            } else {
+                for (Direction candidateFace : Direction.values()) {
+                    BlockPos candidateAnchor = target.relative(candidateFace.getOpposite());
+                    if (placed.contains(candidateAnchor)) {
+                        anchor = candidateAnchor;
+                        face = candidateFace;
+                        break;
+                    }
+                }
+            }
+            if (anchor == null || face == null) {
+                cancelWith("Abgebrochen: Form ist nicht zusammenhaengend platzierbar.");
+                return;
+            }
+
+            Vec3 hitLocation = Vec3.atCenterOf(anchor).add(
+                    face.getStepX() * 0.5, face.getStepY() * 0.5, face.getStepZ() * 0.5);
+            BlockHitResult placementHit = new BlockHitResult(hitLocation, face, anchor, false);
+            InteractionResult result = client.gameMode.useItemOn(
+                    client.player, InteractionHand.MAIN_HAND, placementHit);
+
+            if (!result.consumesAction()) {
+                cancelWith("Der Server hat das Setzen abgelehnt. Bau gestoppt.");
+                return;
+            }
+
+            placed.add(target);
+            remaining.remove();
+            int done = placed.size();
+            state = "Bau laeuft: " + done + " / " + total;
+            if (remaining.isEmpty()) state = "Fertig: " + total + " Bloecke gesetzt.";
+        }
+
+        static void togglePause() {
+            if (remaining.isEmpty()) return;
+            paused = !paused;
+            state = paused ? "Pausiert: " + placed.size() + " / " + total
+                    : "Bau laeuft: " + placed.size() + " / " + total;
+        }
+
+        static void cancel() {
+            if (remaining.isEmpty()) {
+                state = "Kein Bauvorgang aktiv.";
+                return;
+            }
+            remaining.clear();
+            paused = false;
+            state = "Bau abgebrochen nach " + placed.size() + " von " + total + " Bloecken.";
+        }
+
+        private static void cancelWith(String message) {
+            remaining.clear();
+            paused = false;
+            state = message;
+        }
+
+        static String status() {
+            return state;
         }
     }
 }
