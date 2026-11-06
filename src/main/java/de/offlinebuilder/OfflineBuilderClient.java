@@ -12,6 +12,7 @@ import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
 import net.minecraft.world.InteractionHand;
@@ -43,10 +44,11 @@ public final class OfflineBuilderClient implements ClientModInitializer {
             KeyMapping.Category.register(Identifier.fromNamespaceAndPath("offlinebuilder", "main"));
     private static KeyMapping openMenuKey;
 
-    private static final Block[] MATERIALS = {
-            Blocks.STONE_BRICKS, Blocks.COBBLESTONE, Blocks.OAK_PLANKS,
-            Blocks.BRICKS, Blocks.GLASS, Blocks.SMOOTH_STONE, Blocks.STONE
-    };
+    // Read the actual block registry: the material selector is not limited to a hand-picked list.
+    private static final List<Block> MATERIALS = BuiltInRegistries.BLOCK.stream()
+            .filter(block -> !block.defaultBlockState().isAir())
+            .filter(block -> block.asItem() != net.minecraft.world.item.Items.AIR)
+            .toList();
     private static int materialIndex = 0;
 
     private static Shape shape = Shape.WALL;
@@ -200,7 +202,8 @@ public final class OfflineBuilderClient implements ClientModInitializer {
     }
 
     private static final class BuilderScreen extends Screen {
-        private static final int PANEL_WIDTH = 330;
+        private int panelWidth;
+        private int panelLeft;
 
         BuilderScreen() {
             super(Component.literal("OfflineBuilder"));
@@ -208,13 +211,16 @@ public final class OfflineBuilderClient implements ClientModInitializer {
 
         @Override
         protected void init() {
-            int left = (this.width - PANEL_WIDTH) / 2;
+            // Keep every widget inside the visible screen, including narrow GUI scales.
+            panelWidth = Math.max(150, Math.min(330, this.width - 20));
+            panelLeft = Math.max(10, (this.width - panelWidth) / 2);
+            int left = panelLeft;
             int y = Math.max(32, this.height / 2 - 122);
 
             addRenderableWidget(Button.builder(Component.literal("Form: " + shape.label + "  ›"), b -> {
                 shape = shape.next();
                 rebuildWidgets();
-            }).bounds(left, y, PANEL_WIDTH, 20).build());
+            }).bounds(left, y, panelWidth, 20).build());
             y += 28;
 
             addDimensionRow(left, y, "Breite", 0);
@@ -225,11 +231,11 @@ public final class OfflineBuilderClient implements ClientModInitializer {
             y += 30;
 
             addRenderableWidget(Button.builder(
-                    Component.literal("Material: " + MATERIALS[materialIndex].getName().getString() + "  ›"),
+                    Component.literal("Material: " + MATERIALS.get(Math.floorMod(materialIndex, MATERIALS.size())).getName().getString() + "  ›"),
                     b -> {
-                        materialIndex = (materialIndex + 1) % MATERIALS.length;
+                        materialIndex = (materialIndex + 1) % MATERIALS.size();
                         rebuildWidgets();
-                    }).bounds(left, y, PANEL_WIDTH, 20).build());
+                    }).bounds(left, y, panelWidth, 20).build());
             y += 27;
 
             addRenderableWidget(Button.builder(
@@ -263,18 +269,18 @@ public final class OfflineBuilderClient implements ClientModInitializer {
             y += 27;
 
             int gap = 5;
-            int half = (PANEL_WIDTH - gap) / 2;
+            int half = (panelWidth - gap) / 2;
             addRenderableWidget(Button.builder(Component.literal("Pause / Weiter"), b -> {
                 BuildEngine.togglePause();
             }).bounds(left, y, half, 20).build());
             addRenderableWidget(Button.builder(Component.literal("Abbrechen"), b -> {
                 BuildEngine.cancel();
-            }).bounds(left + half + gap, y, half, 20).build());
+            }).bounds(left + half + gap, y, panelWidth - half - gap, 20).build());
         }
 
         private void addDimensionRow(int left, int y, String label, int which) {
             int value = which == 0 ? width : which == 1 ? length : height;
-            int third = PANEL_WIDTH / 3;
+            int third = panelWidth / 3;
             addRenderableWidget(Button.builder(Component.literal(label + "  −"), b -> {
                 changeDimension(which, -1);
                 rebuildWidgets();
@@ -286,7 +292,7 @@ public final class OfflineBuilderClient implements ClientModInitializer {
             addRenderableWidget(Button.builder(Component.literal(" + " + label), b -> {
                 changeDimension(which, 1);
                 rebuildWidgets();
-            }).bounds(left + third * 2, y, third, 20).build());
+            }).bounds(left + third * 2, y, panelWidth - third * 2, 20).build());
         }
 
         private void changeDimension(int which, int delta) {
@@ -303,7 +309,7 @@ public final class OfflineBuilderClient implements ClientModInitializer {
                     Component.literal("Breite: " + width + "   Laenge: " + length + "   Hoehe: " + height),
                     this.width / 2, this.height / 2 - 94, 0xFFB9DCE8);
             graphics.centeredText(this.font,
-                    Component.literal("Block: " + MATERIALS[materialIndex].getName().getString()),
+                    Component.literal("Block: " + MATERIALS.get(materialIndex).getName().getString()),
                     this.width / 2, this.height / 2 + 48, 0xFFB9DCE8);
             graphics.centeredText(this.font,
                     Component.literal(BuildEngine.status()),
@@ -464,7 +470,7 @@ public final class OfflineBuilderClient implements ClientModInitializer {
                 return;
             }
 
-            selectedBlock = MATERIALS[materialIndex];
+            selectedBlock = MATERIALS.get(Math.floorMod(materialIndex, MATERIALS.size()));
             List<BlockPos> plan = ShapePlanner.create(base, client.player.getDirection());
             if (plan.isEmpty()) {
                 state = "Diese Form konnte nicht geplant werden.";
