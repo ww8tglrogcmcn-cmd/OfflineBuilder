@@ -182,8 +182,8 @@ public final class OfflineBuilderClient implements ClientModInitializer {
     }
 
     private static void tell(Minecraft client, String message) {
-        if (client.player != null) client.player.displayClientMessage(Component.literal(message), false);
         uiStatus = message;
+        if (client.player != null) client.gui.setScreen(new BuilderScreen());
     }
 
     private enum Shape {
@@ -549,10 +549,19 @@ public final class OfflineBuilderClient implements ClientModInitializer {
         }
 
         static void togglePause() {
-            if (remaining.isEmpty()) return;
-            paused = !paused;
-            state = paused ? "Pausiert: " + placed.size() + " / " + total
-                    : "Bau laeuft: " + placed.size() + " / " + total;
+            if (paused) resume(); else pause();
+        }
+
+        static void pause() {
+            if (remaining.isEmpty()) { state = "Kein Bauvorgang aktiv."; return; }
+            paused = true;
+            state = "Pausiert: " + placed.size() + " / " + total;
+        }
+
+        static void resume() {
+            if (remaining.isEmpty()) { state = "Kein pausierter Bauvorgang."; return; }
+            paused = false;
+            state = "Bau laeuft: " + placed.size() + " / " + total;
         }
 
         static void cancel() {
