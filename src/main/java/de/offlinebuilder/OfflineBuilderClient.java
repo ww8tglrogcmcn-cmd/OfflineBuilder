@@ -4,6 +4,7 @@ import com.mojang.blaze3d.platform.InputConstants;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
+import net.fabricmc.fabric.api.client.message.v1.ClientSendMessageEvents;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
@@ -27,6 +28,7 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Queue;
 import java.util.Set;
 
@@ -43,7 +45,7 @@ public final class OfflineBuilderClient implements ClientModInitializer {
 
     private static final Block[] MATERIALS = {
             Blocks.STONE_BRICKS, Blocks.COBBLESTONE, Blocks.OAK_PLANKS,
-            Blocks.BRICKS, Blocks.GLASS, Blocks.SMOOTH_STONE
+            Blocks.BRICKS, Blocks.GLASS, Blocks.SMOOTH_STONE, Blocks.STONE
     };
     private static int materialIndex = 0;
 
@@ -67,6 +69,121 @@ public final class OfflineBuilderClient implements ClientModInitializer {
             }
             BuildEngine.tick(client);
         });
+
+        ClientSendMessageEvents.ALLOW_CHAT.register(message -> {
+            if (!message.startsWith("+")) return true;
+            handleBuilderCommand(message.substring(1));
+            return false;
+        });
+    }
+
+
+    /** Local chat commands use '+' so they do not collide with common blueprint mods. */
+    private static void handleBuilderCommand(String raw) {
+        Minecraft client = Minecraft.getInstance();
+        String trimmed = raw.trim();
+        String[] args = trimmed.isEmpty() ? new String[0] : trimmed.split("\\s+");
+        if (args.length == 0 || args[0].equalsIgnoreCase("help")) {
+            tell(client, "OfflineBuilder: +menu | +help | +build wall length 20 height 4 stone_bricks");
+            tell(client, "Weitere Beispiele: +build floor 20x20 oak_planks | +build sphere radius 8 glass");
+            tell(client, "Steuerung: +build pause | +build resume | +build cancel");
+            return;
+        }
+        if (args[0].equalsIgnoreCase("menu")) {
+            if (client.gui.screen() == null) client.gui.setScreen(new BuilderScreen());
+            return;
+        }
+        if (!args[0].equalsIgnoreCase("build")) {
+            tell(client, "Unbekannter OfflineBuilder-Befehl. Nutze +help.");
+            return;
+        }
+        if (args.length < 2) {
+            tell(client, "Nutzung: +build <wall|floor|cuboid|sphere|dome|cylinder|pyramid> ...");
+            return;
+        }
+        String operation = args[1].toLowerCase(Locale.ROOT);
+        if (operation.equals("pause")) { BuildEngine.pause(); tell(client, BuildEngine.status()); return; }
+        if (operation.equals("resume")) { BuildEngine.resume(); tell(client, BuildEngine.status()); return; }
+        if (operation.equals("cancel")) { BuildEngine.cancel(); tell(client, BuildEngine.status()); return; }
+        if (operation.equals("undo")) {
+            tell(client, "Rueckgaengig machen ist noch nicht in dieser Testversion enthalten.");
+            return;
+        }
+        if (operation.equals("preview")) {
+            BlockHitResult hit = currentBlockHit(client);
+            if (hit == null || client.player == null) { tell(client, "Schau zuerst auf einen Block."); return; }
+            List<BlockPos> preview = ShapePlanner.create(hit.getBlockPos().relative(hit.getDirection()),
+                    client.player.getDirection());
+            tell(client, "Vorschau: " + preview.size() + " Bloecke. Es wurde noch nichts gesetzt.");
+            return;
+        }
+
+        switch (operation) {
+            case "wall" -> shape = Shape.WALL;
+            case "floor" -> shape = Shape.FLOOR;
+            case "cuboid", "box", "quader" -> shape = Shape.CUBOID;
+            case "sphere", "kugel" -> shape = Shape.SPHERE;
+            case "dome", "kuppel" -> shape = Shape.DOME;
+            case "cylinder", "zylinder" -> shape = Shape.CYLINDER;
+            case "pyramid", "pyramide" -> shape = Shape.PYRAMID;
+            case "house", "haus" -> { tell(client, "Der Hausgenerator folgt in einer spaeteren Ausbaustufe."); return; }
+            default -> { tell(client, "Unbekannte Form: " + operation + ". Nutze +help."); return; }
+        }
+
+        int parsedWidth = numberAfter(args, "width", width);
+        int parsedLength = numberAfter(args, "length", length);
+        int parsedHeight = numberAfter(args, "height", height);
+        int radius = numberAfter(args, "radius", Math.max(1, width / 2));
+        for (String token : args) {
+            if (token.matches("\\d{1,2}x\\d{1,2}")) {
+                String[] pair = token.toLowerCase(Locale.ROOT).split("x");
+                parsedWidth = Integer.parseInt(pair[0]);
+                parsedLength = Integer.parseInt(pair[1]);
+            }
+        }
+        if (shape == Shape.WALL) parsedWidth = numberAfter(args, "length", parsedWidth);
+        if (shape == Shape.FLOOR && parsedLength == length) parsedLength = parsedWidth;
+        if (shape == Shape.SPHERE || shape == Shape.DOME || shape == Shape.CYLINDER) {
+            parsedWidth = radius * 2 + 1;
+            parsedLength = parsedWidth;
+        }
+        if (shape == Shape.PYRAMID) parsedLength = parsedWidth;
+        width = clamp(parsedWidth, 1, 48);
+        length = clamp(parsedLength, 1, 48);
+        height = clamp(parsedHeight, 1, 48);
+
+        for (String token : args) {
+            int found = materialIndex(token);
+            if (found >= 0) { materialIndex = found; break; }
+        }
+        hollow = false;
+        if (trimmed.toLowerCase(Locale.ROOT).contains(" hollow") || trimmed.toLowerCase(Locale.ROOT).contains(" hohl")) {
+            hollow = true;
+        }
+        BuildEngine.start(client);
+        tell(client, BuildEngine.status());
+    }
+
+    private static int numberAfter(String[] args, String key, int fallback) {
+        for (int i = 0; i + 1 < args.length; i++) {
+            if (args[i].equalsIgnoreCase(key)) {
+                try { return Integer.parseInt(args[i + 1]); }
+                catch (NumberFormatException ignored) { return fallback; }
+            }
+        }
+        return fallback;
+    }
+
+    private static int materialIndex(String token) {
+        String key = token.toLowerCase(Locale.ROOT).replace('-', '_');
+        String[] names = {"stone_bricks", "cobblestone", "oak_planks", "bricks", "glass", "smooth_stone", "stone"};
+        for (int i = 0; i < names.length; i++) if (names[i].equals(key)) return i;
+        return -1;
+    }
+
+    private static void tell(Minecraft client, String message) {
+        if (client.player != null) client.player.displayClientMessage(Component.literal(message), false);
+        uiStatus = message;
     }
 
     private enum Shape {
