@@ -235,7 +235,7 @@ public final class OfflineBuilderClient implements ClientModInitializer {
         private final Screen parent;
         private EditBox search;
         private int page = 0;
-        private static final int PAGE_SIZE = 8;
+        private int pageSize = 8;
         MaterialScreen(Screen parent) { super(Component.literal("OfflineBuilder - Material")); this.parent = parent; }
         private List<Block> matches() {
             String q = search == null ? materialSearch : search.getValue().toLowerCase(Locale.ROOT).trim();
@@ -246,25 +246,30 @@ public final class OfflineBuilderClient implements ClientModInitializer {
             }).toList();
         }
         @Override protected void init() {
-            int w = Math.max(160, Math.min(360, width - 24)), left = (width - w) / 2;
+            int w = Math.max(1, Math.min(360, width - 24));
+            int left = Math.max(0, (width - w) / 2);
+            pageSize = Math.max(1, Math.min(8, (height - 150) / 26));
             search = new EditBox(font, left, 34, w, 20, Component.literal("Block suchen"));
             search.setValue(materialSearch);
             search.setResponder(value -> { materialSearch = value; page = 0; rebuildWidgets(); });
             addRenderableWidget(search);
             List<Block> found = matches();
-            int pages = Math.max(1, (found.size() + PAGE_SIZE - 1) / PAGE_SIZE);
+            int pages = Math.max(1, (found.size() + pageSize - 1) / pageSize);
             page = Math.min(page, pages - 1);
-            for (int i = page * PAGE_SIZE; i < Math.min(found.size(), (page + 1) * PAGE_SIZE); i++) {
+            for (int i = page * pageSize; i < Math.min(found.size(), (page + 1) * pageSize); i++) {
                 Block block = found.get(i); int index = MATERIALS.indexOf(block);
                 String id = String.valueOf(BuiltInRegistries.BLOCK.getKey(block));
                 addRenderableWidget(Button.builder(Component.literal(block.getName().getString() + " [" + id + "]"), b -> {
                     materialIndex = index; minecraft.gui.setScreen(parent);
-                }).bounds(left, 62 + (i - page * PAGE_SIZE) * 26, w, 22).build());
+                }).bounds(left, 62 + (i - page * pageSize) * 26, w, 22).build());
             }
-            addRenderableWidget(Button.builder(Component.literal("<"), b -> { page = Math.max(0,page-1); rebuildWidgets(); }).bounds(left, height-55, 40, 20).build());
-            addRenderableWidget(Button.builder(Component.literal("Seite " + (page+1) + "/" + pages + " - " + found.size() + " Treffer"), b -> {}).bounds(left+44,height-55,w-88,20).build());
-            addRenderableWidget(Button.builder(Component.literal(">"), b -> { page = Math.min(pages-1,page+1); rebuildWidgets(); }).bounds(left+w-40,height-55,40,20).build());
-            addRenderableWidget(Button.builder(Component.literal("Zurueck"), b -> minecraft.gui.setScreen(parent)).bounds(left,height-28,w,20).build());
+            int sideWidth = Math.min(40, Math.max(1, w / 4));
+            int middleWidth = Math.max(1, w - sideWidth * 2 - 8);
+            int navY = Math.max(90, height - 55);
+            addRenderableWidget(Button.builder(Component.literal("<"), b -> { page = Math.max(0,page-1); rebuildWidgets(); }).bounds(left, navY, sideWidth, 20).build());
+            addRenderableWidget(Button.builder(Component.literal("Seite " + (page+1) + "/" + pages + " · " + found.size()), b -> {}).bounds(left+sideWidth+4,navY,middleWidth,20).build());
+            addRenderableWidget(Button.builder(Component.literal(">"), b -> { page = Math.min(pages-1,page+1); rebuildWidgets(); }).bounds(left+w-sideWidth,navY,sideWidth,20).build());
+            addRenderableWidget(Button.builder(Component.literal("Zurueck"), b -> minecraft.gui.setScreen(parent)).bounds(left,Math.max(navY+25,height-28),w,20).build());
             setInitialFocus(search);
         }
         @Override public void extractRenderState(GuiGraphicsExtractor graphics,int mouseX,int mouseY,float delta) {
@@ -277,6 +282,8 @@ public final class OfflineBuilderClient implements ClientModInitializer {
     private static final class BuilderScreen extends Screen {
         private int panelWidth;
         private int panelLeft;
+        private int panelTop;
+        private int panelBottom;
 
         BuilderScreen() {
             super(Component.literal("OfflineBuilder"));
@@ -285,10 +292,12 @@ public final class OfflineBuilderClient implements ClientModInitializer {
         @Override
         protected void init() {
             // Keep every widget inside the visible screen, including narrow GUI scales.
-            panelWidth = Math.max(150, Math.min(330, this.width - 20));
-            panelLeft = Math.max(10, (this.width - panelWidth) / 2);
+            panelWidth = Math.max(1, Math.min(330, this.width - 20));
+            panelLeft = Math.max(0, (this.width - panelWidth) / 2);
             int left = panelLeft;
-            int y = Math.max(32, this.height / 2 - 122);
+            int y = Math.max(8, (this.height - 260) / 2);
+            panelTop = Math.max(0, y - 22);
+            panelBottom = Math.min(this.height, y + 246);
 
             addRenderableWidget(Button.builder(Component.literal("Form: " + shape.label + "  ›"), b -> {
                 shape = shape.next();
@@ -373,6 +382,10 @@ public final class OfflineBuilderClient implements ClientModInitializer {
 
         @Override
         public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float delta) {
+            graphics.fill(panelLeft - 10, panelTop, panelLeft + panelWidth + 10, panelBottom, 0xD91A222C);
+            graphics.fill(panelLeft - 10, panelTop, panelLeft + panelWidth + 10, panelTop + 2, 0xFF27A9C4);
+            graphics.fill(panelLeft - 10, panelTop, panelLeft - 8, panelBottom, 0xFF27A9C4);
+            graphics.fill(panelLeft + panelWidth + 8, panelTop, panelLeft + panelWidth + 10, panelBottom, 0xFF27A9C4);
             super.extractRenderState(graphics, mouseX, mouseY, delta);
             graphics.centeredText(this.font, this.title, this.width / 2, 12, 0xFFFFFFFF);
             graphics.centeredText(this.font,
