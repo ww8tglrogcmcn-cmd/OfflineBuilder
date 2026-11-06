@@ -243,7 +243,7 @@ public final class OfflineBuilderClient implements ClientModInitializer {
                     b -> {
                         hollow = !hollow;
                         rebuildWidgets();
-                    }).bounds(left, y, PANEL_WIDTH, 20).build());
+                    }).bounds(left, y, panelWidth, 20).build());
             y += 30;
 
             addRenderableWidget(Button.builder(Component.literal("Vorschau berechnen"), b -> {
@@ -260,12 +260,12 @@ public final class OfflineBuilderClient implements ClientModInitializer {
                         uiStatus = "Vorschau: " + plan.size() + " Bloecke. Noch nichts gesetzt.";
                     }
                 }
-            }).bounds(left, y, PANEL_WIDTH, 20).build());
+            }).bounds(left, y, panelWidth, 20).build());
             y += 27;
 
             addRenderableWidget(Button.builder(Component.literal("Bau starten"), b -> {
                 BuildEngine.start(this.minecraft);
-            }).bounds(left, y, PANEL_WIDTH, 20).build());
+            }).bounds(left, y, panelWidth, 20).build());
             y += 27;
 
             int gap = 5;
@@ -309,7 +309,7 @@ public final class OfflineBuilderClient implements ClientModInitializer {
                     Component.literal("Breite: " + width + "   Laenge: " + length + "   Hoehe: " + height),
                     this.width / 2, this.height / 2 - 94, 0xFFB9DCE8);
             graphics.centeredText(this.font,
-                    Component.literal("Block: " + MATERIALS.get(materialIndex).getName().getString()),
+                    Component.literal("Block: " + MATERIALS.get(Math.floorMod(materialIndex, MATERIALS.size())).getName().getString()),
                     this.width / 2, this.height / 2 + 48, 0xFFB9DCE8);
             graphics.centeredText(this.font,
                     Component.literal(BuildEngine.status()),
