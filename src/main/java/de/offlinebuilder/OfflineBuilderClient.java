@@ -474,11 +474,25 @@ public final class OfflineBuilderClient implements ClientModInitializer {
         }
     }
 
+    /**
+     * Rebuilt main editor screen.
+     *
+     * The old screen used three tiny +/- buttons for every dimension and rebuilt the
+     * complete widget tree on every click. This version uses stable numeric fields and
+     * computes every column from the usable width, never creating a negative button size.
+     */
     private static final class BuilderScreen extends Screen {
-        private int panelWidth;
+        private static final int ACCENT = 0xFF27B7C9;
+        private static final int TEXT = 0xFFE8F2F5;
+        private static final int MUTED = 0xFF9BB0B9;
         private int panelLeft;
+        private int panelWidth;
         private int panelTop;
         private int panelBottom;
+        private EditBox widthInput;
+        private EditBox lengthInput;
+        private EditBox heightInput;
+        private String screenStatus = "";
 
         BuilderScreen() {
             super(Component.literal("OfflineBuilder"));
@@ -486,122 +500,187 @@ public final class OfflineBuilderClient implements ClientModInitializer {
 
         @Override
         protected void init() {
-            // Keep every widget inside the visible screen, including narrow GUI scales.
-            panelWidth = Math.max(1, Math.min(330, this.width - 20));
+            // All coordinates are GUI-scaled screen coordinates. Keep a consistent
+            // centered panel and clamp every computed control width to at least 1 px.
+            panelWidth = Math.max(1, Math.min(380, this.width - 24));
             panelLeft = Math.max(0, (this.width - panelWidth) / 2);
-            int left = panelLeft;
-            int y = Math.max(8, (this.height - 260) / 2);
-            panelTop = Math.max(0, y - 22);
-            panelBottom = Math.min(this.height, y + 246);
+            panelTop = Math.max(10, (this.height - 238) / 2);
 
-            int formWidth = Math.max(1, (panelWidth - 5) / 2);
-            addRenderableWidget(Button.builder(Component.literal("Form: " + shape.label + "  ›"), b -> {
+            int gap = 6;
+            int halfA = Math.max(1, (panelWidth - gap) / 2);
+            int halfB = Math.max(1, panelWidth - halfA - gap);
+            int rowY = panelTop + 36;
+
+            // Row 1: shape and roof profile.
+            addRenderableWidget(Button.builder(Component.literal("FORM  ·  " + shape.label + "  ▾"), b -> {
+                commitDimensions();
                 shape = shape.next();
                 rebuildWidgets();
-            }).bounds(left, y, formWidth, 20).build());
-            addRenderableWidget(Button.builder(Component.literal("Dach: " + roofStyle.label), b -> {
+            }).bounds(panelLeft, rowY, halfA, 22).build());
+            addRenderableWidget(Button.builder(Component.literal("DACH  ·  " + roofStyle.label + "  ▾"), b -> {
+                commitDimensions();
                 roofStyle = roofStyle.next();
                 rebuildWidgets();
-            }).bounds(left + formWidth + 5, y, panelWidth - formWidth - 5, 20).build());
-            y += 28;
+            }).bounds(panelLeft + halfA + gap, rowY, halfB, 22).build());
 
-            addDimensionRow(left, y, "Breite", 0);
-            y += 27;
-            addDimensionRow(left, y, "Laenge", 1);
-            y += 27;
-            addDimensionRow(left, y, "Hoehe", 2);
-            y += 30;
+            // Row 2: proper editable numeric inputs, not mouse-sensitive +/- strips.
+            int dimLabelY = rowY + 31;
+            int inputY = dimLabelY + 13;
+            int colGap = 8;
+            int colWidth = Math.max(1, (panelWidth - colGap * 2) / 3);
+            int x0 = panelLeft;
+            int x1 = panelLeft + colWidth + colGap;
+            int x2 = panelLeft + (colWidth + colGap) * 2;
+            addDimensionInput("BREITE", width, x0, dimLabelY, colWidth, inputY, 0);
+            addDimensionInput("LÄNGE", length, x1, dimLabelY, colWidth, inputY, 1);
+            addDimensionInput("HÖHE", height, x2, dimLabelY, Math.max(1, panelWidth - (colWidth + colGap) * 2),
+                    inputY, 2);
 
+            int materialY = inputY + 31;
             addRenderableWidget(Button.builder(
-                    Component.literal("Material suchen  (" + MATERIALS.size() + " Bloecke)"),
-                    b -> this.minecraft.gui.setScreen(new MaterialScreen(this))).bounds(left, y, panelWidth, 20).build());
-            y += 27;
-
-            int modeWidth = Math.max(1, (panelWidth - 5) / 2);
-            addRenderableWidget(Button.builder(
-                    Component.literal(hollow ? "Bauweise: Hohl" : "Bauweise: Voll"),
+                    Component.literal("MATERIAL SUCHEN  ·  " + MATERIALS.get(Math.floorMod(materialIndex, MATERIALS.size())).getName().getString()),
                     b -> {
-                        hollow = !hollow;
-                        rebuildWidgets();
-                    }).bounds(left, y, modeWidth, 20).build());
-            addRenderableWidget(Button.builder(Component.literal("Einstellungen"), b -> {
+                        commitDimensions();
+                        this.minecraft.gui.setScreen(new MaterialScreen(this));
+                    }).bounds(panelLeft, materialY, panelWidth, 22).build());
+
+            int optionY = materialY + 29;
+            addRenderableWidget(Button.builder(Component.literal(hollow ? "HOHLBAU  ·  AKTIV" : "HOHLBAU  ·  AUS"), b -> {
+                commitDimensions();
+                hollow = !hollow;
+                rebuildWidgets();
+            }).bounds(panelLeft, optionY, halfA, 22).build());
+            addRenderableWidget(Button.builder(Component.literal("EINSTELLUNGEN"), b -> {
+                commitDimensions();
                 this.minecraft.gui.setScreen(new SettingsScreen(this));
-            }).bounds(left + modeWidth + 5, y, panelWidth - modeWidth - 5, 20).build());
-            y += 30;
+            }).bounds(panelLeft + halfA + gap, optionY, halfB, 22).build());
 
-            addRenderableWidget(Button.builder(Component.literal("Vorschau berechnen"), b -> {
-                if (this.minecraft == null || this.minecraft.player == null) {
-                    uiStatus = "Dazu musst du in einer Welt sein.";
-                } else {
-                    BlockHitResult hit = currentBlockHit(this.minecraft);
-                    if (hit == null) {
-                        uiStatus = "Schau auf einen Block, an den gebaut werden kann.";
-                    } else {
-                        List<BlockPos> plan = ShapePlanner.create(
-                                hit.getBlockPos().relative(hit.getDirection()),
-                                this.minecraft.player.getDirection());
-                        uiStatus = "Vorschau: " + plan.size() + " Bloecke. Noch nichts gesetzt.";
-                    }
-                }
-            }).bounds(left, y, panelWidth, 20).build());
-            y += 27;
+            int actionY = optionY + 31;
+            addRenderableWidget(Button.builder(Component.literal("VORSCHAU"), b -> showPreview())
+                    .bounds(panelLeft, actionY, halfA, 24).build());
+            addRenderableWidget(Button.builder(Component.literal("BAU STARTEN"), b -> startBuild())
+                    .bounds(panelLeft + halfA + gap, actionY, halfB, 24).build());
 
-            addRenderableWidget(Button.builder(Component.literal("Bau starten"), b -> {
-                BuildEngine.start(this.minecraft);
-            }).bounds(left, y, panelWidth, 20).build());
-            y += 27;
-
-            int gap = 5;
-            int half = (panelWidth - gap) / 2;
-            addRenderableWidget(Button.builder(Component.literal("Pause / Weiter"), b -> {
+            int controlY = actionY + 31;
+            addRenderableWidget(Button.builder(Component.literal("PAUSE / WEITER"), b -> {
                 BuildEngine.togglePause();
-            }).bounds(left, y, half, 20).build());
-            addRenderableWidget(Button.builder(Component.literal("Abbrechen"), b -> {
+                screenStatus = BuildEngine.status();
+            }).bounds(panelLeft, controlY, halfA, 22).build());
+            addRenderableWidget(Button.builder(Component.literal("ABBRECHEN"), b -> {
                 BuildEngine.cancel();
-            }).bounds(left + half + gap, y, panelWidth - half - gap, 20).build());
+                screenStatus = BuildEngine.status();
+            }).bounds(panelLeft + halfA + gap, controlY, halfB, 22).build());
+
+            int footerY = controlY + 29;
+            panelBottom = Math.min(this.height - 4, footerY + 22);
+            if (panelBottom < controlY + 22) panelBottom = Math.min(this.height, controlY + 24);
+
+            setInitialFocus(widthInput);
         }
 
-        private void addDimensionRow(int left, int y, String label, int which) {
-            int value = which == 0 ? width : which == 1 ? length : height;
-            int third = panelWidth / 3;
-            addRenderableWidget(Button.builder(Component.literal("−"), b -> {
-                changeDimension(which, -1);
-                rebuildWidgets();
-            }).bounds(left, y, third - 3, 20).build());
-            addRenderableWidget(Button.builder(Component.literal(label + ": " + value), b -> {})
-                    .bounds(left + third, y, third - 3, 20).build());
-            addRenderableWidget(Button.builder(Component.literal("+"), b -> {
-                changeDimension(which, 1);
-                rebuildWidgets();
-            }).bounds(left + third * 2, y, panelWidth - third * 2, 20).build());
+        private void addDimensionInput(String label, int value, int x, int labelY,
+                                       int fieldWidth, int fieldY, int which) {
+            graphicsLabel(label, x, labelY);
+            EditBox field = new EditBox(font, x, fieldY, Math.max(1, fieldWidth), 22,
+                    Component.literal(label));
+            field.setValue(Integer.toString(value));
+            field.setMaxLength(2);
+            field.setFilter(text -> text.isEmpty() || text.matches("\\d{0,2}"));
+            if (which == 0) widthInput = field;
+            else if (which == 1) lengthInput = field;
+            else heightInput = field;
+            addRenderableWidget(field);
         }
 
-        private void changeDimension(int which, int delta) {
-            if (which == 0) width = clamp(width + delta, 1, 48);
-            if (which == 1) length = clamp(length + delta, 1, 48);
-            if (which == 2) height = clamp(height + delta, 1, 48);
+        private void graphicsLabel(String label, int x, int y) {
+            // Labels are drawn in extractRenderState below so they remain crisp and
+            // independent of widget focus and mouse state.
+            dimensionLabels.add(new DimensionLabel(label, x, y));
+        }
+
+        private final List<DimensionLabel> dimensionLabels = new ArrayList<>();
+
+        private record DimensionLabel(String text, int x, int y) {}
+
+        private boolean commitDimensions() {
+            Integer newWidth = parseDimension(widthInput, "Breite");
+            Integer newLength = parseDimension(lengthInput, "Länge");
+            Integer newHeight = parseDimension(heightInput, "Höhe");
+            if (newWidth == null || newLength == null || newHeight == null) return false;
+            width = newWidth;
+            length = newLength;
+            height = newHeight;
+            return true;
+        }
+
+        private Integer parseDimension(EditBox input, String label) {
+            if (input == null) return null;
+            try {
+                int value = Integer.parseInt(input.getValue());
+                if (value < 1 || value > 48) {
+                    screenStatus = label + " muss zwischen 1 und 48 liegen.";
+                    return null;
+                }
+                return value;
+            } catch (NumberFormatException exception) {
+                screenStatus = "Bitte für " + label + " eine Zahl von 1 bis 48 eingeben.";
+                return null;
+            }
+        }
+
+        private void showPreview() {
+            if (!commitDimensions()) return;
+            if (this.minecraft == null || this.minecraft.player == null) {
+                screenStatus = "Öffne eine Welt, bevor du eine Vorschau berechnest.";
+                return;
+            }
+            BlockHitResult hit = currentBlockHit(this.minecraft);
+            if (hit == null) {
+                screenStatus = "Schau auf einen festen Block als Startpunkt.";
+                return;
+            }
+            List<BlockPos> plan = ShapePlanner.create(
+                    hit.getBlockPos().relative(hit.getDirection()),
+                    this.minecraft.player.getDirection());
+            screenStatus = plan.isEmpty()
+                    ? "Diese Form konnte nicht geplant werden."
+                    : "Vorschau: " + plan.size() + " Blöcke. Noch nichts gesetzt.";
+        }
+
+        private void startBuild() {
+            if (!commitDimensions()) return;
+            BuildEngine.start(this.minecraft);
+            screenStatus = BuildEngine.status();
         }
 
         @Override
         public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float delta) {
-            graphics.fill(panelLeft - 10, panelTop, panelLeft + panelWidth + 10, panelBottom, 0xD91A222C);
-            graphics.fill(panelLeft - 10, panelTop, panelLeft + panelWidth + 10, panelTop + 2, 0xFF27A9C4);
-            graphics.fill(panelLeft - 10, panelTop, panelLeft - 8, panelBottom, 0xFF27A9C4);
-            graphics.fill(panelLeft + panelWidth + 8, panelTop, panelLeft + panelWidth + 10, panelBottom, 0xFF27A9C4);
+            // Panel first, then vanilla widgets.
+            graphics.fill(0, 0, this.width, this.height, 0x99070D13);
+            graphics.fill(panelLeft - 8, panelTop + 2, panelLeft + panelWidth + 8, panelBottom,
+                    0xF018222B);
+            graphics.fill(panelLeft - 8, panelTop + 2, panelLeft + panelWidth + 8, panelTop + 4,
+                    ACCENT);
+            graphics.fill(panelLeft - 8, panelTop + 2, panelLeft - 6, panelBottom, ACCENT);
+            graphics.fill(panelLeft + panelWidth + 6, panelTop + 2, panelLeft + panelWidth + 8,
+                    panelBottom, ACCENT);
+
             super.extractRenderState(graphics, mouseX, mouseY, delta);
-            graphics.centeredText(this.font, this.title, this.width / 2, 12, 0xFFFFFFFF);
-            graphics.centeredText(this.font,
-                    Component.literal("Breite: " + width + "   Laenge: " + length + "   Hoehe: " + height),
-                    this.width / 2, this.height / 2 - 94, 0xFFB9DCE8);
-            graphics.centeredText(this.font,
-                    Component.literal("Block: " + MATERIALS.get(Math.floorMod(materialIndex, MATERIALS.size())).getName().getString()),
-                    this.width / 2, this.height / 2 + 48, 0xFFB9DCE8);
-            graphics.centeredText(this.font,
-                    Component.literal(BuildEngine.status()),
-                    this.width / 2, this.height - 24, 0xFFFFFFFF);
-            graphics.centeredText(this.font,
-                    Component.literal("Materialsuche nutzt das Inventar; ein freier Hotbar-Slot wird benoetigt."),
-                    this.width / 2, this.height - 38, 0xFFAAAAAA);
+
+            graphics.centeredText(font, Component.literal("OFFLINE BUILDER"),
+                    width / 2, panelTop + 10, TEXT);
+            graphics.centeredText(font, Component.literal("Formen bauen  ·  lokal  ·  ohne Cloud"),
+                    width / 2, panelTop + 24, MUTED);
+            for (DimensionLabel label : dimensionLabels) {
+                graphics.drawString(font, label.text(), label.x(), label.y(), MUTED);
+            }
+
+            int footerY = Math.min(height - 17, panelBottom - 15);
+            String activeStatus = screenStatus.isEmpty() ? BuildEngine.status() : screenStatus;
+            graphics.centeredText(font, Component.literal(activeStatus), width / 2, footerY, TEXT);
+            graphics.centeredText(font,
+                    Component.literal("Bauen läuft auch bei geschlossenem Menü weiter  ·  Esc = Schließen"),
+                    width / 2, height - 8, MUTED);
         }
 
         @Override
