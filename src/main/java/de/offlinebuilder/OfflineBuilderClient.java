@@ -570,16 +570,15 @@ public final class OfflineBuilderClient implements ClientModInitializer {
             int controlY = actionY + 31;
             addRenderableWidget(Button.builder(Component.literal("PAUSE / WEITER"), b -> {
                 BuildEngine.togglePause();
-                screenStatus = BuildEngine.status();
+                screenStatus = "";
             }).bounds(panelLeft, controlY, halfA, 22).build());
             addRenderableWidget(Button.builder(Component.literal("ABBRECHEN"), b -> {
                 BuildEngine.cancel();
-                screenStatus = BuildEngine.status();
+                screenStatus = "";
             }).bounds(panelLeft + halfA + gap, controlY, halfB, 22).build());
 
-            int footerY = controlY + 29;
-            panelBottom = Math.min(this.height - 4, footerY + 22);
-            if (panelBottom < controlY + 22) panelBottom = Math.min(this.height, controlY + 24);
+            panelBottom = Math.min(this.height - 4, controlY + 25);
+            if (panelBottom < controlY + 22) panelBottom = Math.min(this.height, controlY + 22);
 
             setInitialFocus(widthInput);
         }
@@ -657,7 +656,7 @@ public final class OfflineBuilderClient implements ClientModInitializer {
         private void startBuild() {
             if (!commitDimensions()) return;
             BuildEngine.start(this.minecraft);
-            screenStatus = BuildEngine.status();
+            screenStatus = "";
         }
 
         @Override
@@ -676,16 +675,14 @@ public final class OfflineBuilderClient implements ClientModInitializer {
 
             graphics.centeredText(font, Component.literal("OFFLINE BUILDER"),
                     width / 2, panelTop + 10, TEXT);
-            graphics.centeredText(font, Component.literal("Formen bauen  ·  lokal  ·  ohne Cloud"),
+            String statusText = screenStatus.isEmpty() ? BuildEngine.status() : screenStatus;
+            graphics.centeredText(font, Component.literal(statusText),
                     width / 2, panelTop + 24, MUTED);
             for (DimensionLabel label : dimensionLabels) {
                 graphics.centeredText(font, Component.literal(label.text()),
                         label.x() + label.width() / 2, label.y(), MUTED);
             }
 
-            int footerY = Math.min(height - 17, panelBottom - 15);
-            String activeStatus = screenStatus.isEmpty() ? BuildEngine.status() : screenStatus;
-            graphics.centeredText(font, Component.literal(activeStatus), width / 2, footerY, TEXT);
             graphics.centeredText(font,
                     Component.literal("Bauen läuft auch bei geschlossenem Menü weiter  ·  Esc = Schließen"),
                     width / 2, height - 8, MUTED);
