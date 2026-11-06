@@ -363,6 +363,95 @@ public final class OfflineBuilderClient implements ClientModInitializer {
         @Override public boolean isPauseScreen() { return false; }
     }
 
+    private static final class SettingsScreen extends Screen {
+        private final Screen parent;
+        private EditBox prefixField;
+        private EditBox maxBlocksField;
+        private EditBox speedField;
+        private int panelLeft;
+        private int panelWidth;
+        private String feedback = "";
+
+        SettingsScreen(Screen parent) {
+            super(Component.literal("OfflineBuilder - Einstellungen"));
+            this.parent = parent;
+        }
+
+        @Override
+        protected void init() {
+            panelWidth = Math.max(1, Math.min(330, width - 20));
+            panelLeft = Math.max(0, (width - panelWidth) / 2);
+            int y = 48;
+            prefixField = new EditBox(font, panelLeft, y, panelWidth, 20, Component.literal("Befehls-Prefix"));
+            prefixField.setValue(commandPrefix);
+            addRenderableWidget(prefixField);
+            y += 46;
+            maxBlocksField = new EditBox(font, panelLeft, y, panelWidth, 20, Component.literal("Maximale Blockzahl"));
+            maxBlocksField.setValue(Integer.toString(maxBuildBlocks));
+            addRenderableWidget(maxBlocksField);
+            y += 46;
+            speedField = new EditBox(font, panelLeft, y, panelWidth, 20, Component.literal("Bauintervall"));
+            speedField.setValue(Integer.toString(buildDelayTicks));
+            addRenderableWidget(speedField);
+
+            int gap = 5;
+            int half = Math.max(1, (panelWidth - gap) / 2);
+            addRenderableWidget(Button.builder(Component.literal("Speichern"), b -> save())
+                    .bounds(panelLeft, height - 52, half, 20).build());
+            addRenderableWidget(Button.builder(Component.literal("Zurueck"), b -> minecraft.gui.setScreen(parent))
+                    .bounds(panelLeft + half + gap, height - 52, panelWidth - half - gap, 20).build());
+            setInitialFocus(prefixField);
+        }
+
+        private void save() {
+            if (minecraft == null) return;
+            String prefix = prefixField.getValue().trim();
+            int maxBlocks;
+            int speed;
+            try {
+                maxBlocks = Integer.parseInt(maxBlocksField.getValue().trim());
+                speed = Integer.parseInt(speedField.getValue().trim());
+            } catch (NumberFormatException exception) {
+                feedback = "Blocklimit und Geschwindigkeit muessen Zahlen sein.";
+                return;
+            }
+
+            String prefixResult = SettingsStore.handle(minecraft,
+                    new String[]{"settings", "prefix", prefix});
+            if (!prefixResult.startsWith("Einstellungen gespeichert.")) {
+                feedback = prefixResult;
+                return;
+            }
+            SettingsStore.handle(minecraft,
+                    new String[]{"settings", "maxblocks", Integer.toString(maxBlocks)});
+            SettingsStore.handle(minecraft,
+                    new String[]{"settings", "speed", Integer.toString(speed)});
+            tell(minecraft, "Einstellungen gespeichert.");
+            minecraft.gui.setScreen(parent);
+        }
+
+        @Override
+        public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float delta) {
+            graphics.fill(panelLeft - 10, 24, panelLeft + panelWidth + 10, height - 20, 0xD91A222C);
+            graphics.fill(panelLeft - 10, 24, panelLeft + panelWidth + 10, 26, 0xFF27A9C4);
+            super.extractRenderState(graphics, mouseX, mouseY, delta);
+            graphics.centeredText(font, title, width / 2, 12, 0xFFFFFFFF);
+            graphics.centeredText(font, Component.literal("Befehls-Prefix"), width / 2, 34, 0xFFB9DCE8);
+            graphics.centeredText(font, Component.literal("Maximale Bloecke pro Bau (100-50000)"),
+                    width / 2, 80, 0xFFB9DCE8);
+            graphics.centeredText(font, Component.literal("Bauintervall in Ticks (1-20)"),
+                    width / 2, 126, 0xFFB9DCE8);
+            if (!feedback.isEmpty()) {
+                graphics.centeredText(font, Component.literal(feedback), width / 2, height - 70, 0xFFFFCC66);
+            }
+        }
+
+        @Override
+        public boolean isPauseScreen() {
+            return false;
+        }
+    }
+
     private static final class BuilderScreen extends Screen {
         private int panelWidth;
         private int panelLeft;
@@ -402,16 +491,20 @@ public final class OfflineBuilderClient implements ClientModInitializer {
             y += 30;
 
             addRenderableWidget(Button.builder(
-                    Component.literal("Material suchen / auswaehlen  (" + MATERIALS.size() + ")"),
+                    Component.literal("Material suchen  (" + MATERIALS.size() + " Bloecke)"),
                     b -> this.minecraft.gui.setScreen(new MaterialScreen(this))).bounds(left, y, panelWidth, 20).build());
             y += 27;
 
+            int modeWidth = Math.max(1, (panelWidth - 5) / 2);
             addRenderableWidget(Button.builder(
-                    Component.literal(hollow ? "Bauweise: Hohl" : "Bauweise: Gefuellt"),
+                    Component.literal(hollow ? "Bauweise: Hohl" : "Bauweise: Voll"),
                     b -> {
                         hollow = !hollow;
                         rebuildWidgets();
-                    }).bounds(left, y, panelWidth, 20).build());
+                    }).bounds(left, y, modeWidth, 20).build());
+            addRenderableWidget(Button.builder(Component.literal("Einstellungen"), b -> {
+                this.minecraft.gui.setScreen(new SettingsScreen(this));
+            }).bounds(left + modeWidth + 5, y, panelWidth - modeWidth - 5, 20).build());
             y += 30;
 
             addRenderableWidget(Button.builder(Component.literal("Vorschau berechnen"), b -> {
@@ -449,15 +542,13 @@ public final class OfflineBuilderClient implements ClientModInitializer {
         private void addDimensionRow(int left, int y, String label, int which) {
             int value = which == 0 ? width : which == 1 ? length : height;
             int third = panelWidth / 3;
-            addRenderableWidget(Button.builder(Component.literal(label + "  −"), b -> {
+            addRenderableWidget(Button.builder(Component.literal("−"), b -> {
                 changeDimension(which, -1);
                 rebuildWidgets();
             }).bounds(left, y, third - 3, 20).build());
-            addRenderableWidget(Button.builder(Component.literal(value + "  +"), b -> {
-                changeDimension(which, 1);
-                rebuildWidgets();
-            }).bounds(left + third, y, third - 3, 20).build());
-            addRenderableWidget(Button.builder(Component.literal(" + " + label), b -> {
+            addRenderableWidget(Button.builder(Component.literal(label + ": " + value), b -> {})
+                    .bounds(left + third, y, third - 3, 20).build());
+            addRenderableWidget(Button.builder(Component.literal("+"), b -> {
                 changeDimension(which, 1);
                 rebuildWidgets();
             }).bounds(left + third * 2, y, panelWidth - third * 2, 20).build());
@@ -487,7 +578,7 @@ public final class OfflineBuilderClient implements ClientModInitializer {
                     Component.literal(BuildEngine.status()),
                     this.width / 2, this.height - 24, 0xFFFFFFFF);
             graphics.centeredText(this.font,
-                    Component.literal("Der passende Block muss in deiner Hotbar liegen."),
+                    Component.literal("Materialsuche nutzt das Inventar; ein freier Hotbar-Slot wird benoetigt."),
                     this.width / 2, this.height - 38, 0xFFAAAAAA);
         }
 
