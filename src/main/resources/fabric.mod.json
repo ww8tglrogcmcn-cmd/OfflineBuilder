@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "id": "offlinebuilder",
+  "version": "${version}",
+  "name": "OfflineBuilder",
+  "description": "An offline creative building assistant for Minecraft.",
+  "authors": ["OfflineBuilder"],
+  "environment": "client",
+  "entrypoints": { "client": ["de.offlinebuilder.OfflineBuilderClient"] },
+  "depends": { "fabricloader": ">=0.20.1", "minecraft": "26.3", "java": ">=25", "fabric-api": "*" }
+}
