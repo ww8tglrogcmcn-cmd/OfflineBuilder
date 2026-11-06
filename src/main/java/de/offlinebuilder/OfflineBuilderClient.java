@@ -167,6 +167,28 @@ public final class OfflineBuilderClient implements ClientModInitializer {
             tell(client, BlueprintStore.list(client));
             return;
         }
+        if (operation.equals("saveblocks") || operation.equals("exportblocks")) {
+            tell(client, args.length > 2
+                    ? BlueprintStore.saveStructure(client, args[2])
+                    : "Nutzung: " + commandPrefix + "build saveblocks <name>");
+            return;
+        }
+        if (operation.equals("loadblocks") || operation.equals("importblocks")) {
+            tell(client, args.length > 2
+                    ? BlueprintStore.loadStructure(client, args[2])
+                    : "Nutzung: " + commandPrefix + "build loadblocks <name>");
+            return;
+        }
+        if (operation.equals("listblocks")) {
+            tell(client, BlueprintStore.listStructures(client));
+            return;
+        }
+        if (operation.equals("deleteblocks")) {
+            tell(client, args.length > 2
+                    ? BlueprintStore.deleteStructure(client, args[2])
+                    : "Nutzung: " + commandPrefix + "build deleteblocks <name>");
+            return;
+        }
         if (operation.equals("preview")) {
             BlockHitResult hit = currentBlockHit(client);
             if (hit == null || client.player == null) { tell(client, "Schau zuerst auf einen Block."); return; }
@@ -764,6 +786,113 @@ public final class OfflineBuilderClient implements ClientModInitializer {
                 return "Loeschen fehlgeschlagen: " + exception.getMessage();
             }
         }
+
+        private static Path structureFile(Minecraft client, String name) {
+            return directory(client).resolve(name + ".obs").normalize();
+        }
+
+        static String saveStructure(Minecraft client, String name) {
+            if (client == null || !validName(name)) {
+                return "Ungueltiger Name. Erlaubt: 1-32 Zeichen (A-Z, 0-9, _ oder -).";
+            }
+            List<BlockPos> offsets = BuildEngine.lastStructureOffsets();
+            if (offsets.isEmpty()) {
+                return "Es gibt noch keinen fertig gebauten Bauplan. Baue zuerst eine Form.";
+            }
+            Block material = BuildEngine.lastStructureMaterial();
+            var id = BuiltInRegistries.BLOCK.getKey(material);
+            if (id == null) return "Das verwendete Material konnte nicht gespeichert werden.";
+            try {
+                Files.createDirectories(directory(client));
+                Properties data = new Properties();
+                data.setProperty("format", "offlinebuilder-structure-v1");
+                data.setProperty("count", Integer.toString(offsets.size()));
+                data.setProperty("material", id.toString());
+                for (int i = 0; i < offsets.size(); i++) {
+                    BlockPos pos = offsets.get(i);
+                    data.setProperty("p." + i, pos.getX() + "," + pos.getY() + "," + pos.getZ());
+                }
+                try (OutputStream output = Files.newOutputStream(structureFile(client, name))) {
+                    data.store(output, "OfflineBuilder relative block structure");
+                }
+                return "Struktur '" + name + "' mit " + offsets.size()
+                        + " Blockpositionen lokal gespeichert (.obs).";
+            } catch (IOException exception) {
+                return "Struktur konnte nicht gespeichert werden: " + exception.getMessage();
+            }
+        }
+
+        static String loadStructure(Minecraft client, String name) {
+            if (client == null || !validName(name)) {
+                return "Ungueltiger Name. Erlaubt: 1-32 Zeichen (A-Z, 0-9, _ oder -).";
+            }
+            Path path = structureFile(client, name);
+            if (!Files.isRegularFile(path)) return "Struktur '" + name + "' wurde nicht gefunden.";
+            try (InputStream input = Files.newInputStream(path)) {
+                Properties data = new Properties();
+                data.load(input);
+                if (!"offlinebuilder-structure-v1".equals(data.getProperty("format"))) {
+                    return "Unbekanntes Strukturformat.";
+                }
+                int count = Integer.parseInt(data.getProperty("count", "0"));
+                if (count < 1 || count > maxBuildBlocks) {
+                    return "Die Struktur hat eine ungueltige oder zu grosse Blockzahl (" + count + ").";
+                }
+                int material = materialIndex(data.getProperty("material", ""));
+                if (material < 0) return "Das gespeicherte Material ist hier nicht verfuegbar.";
+                List<BlockPos> offsets = new ArrayList<>(count);
+                Set<BlockPos> unique = new HashSet<>();
+                for (int i = 0; i < count; i++) {
+                    String[] xyz = data.getProperty("p." + i, "").split(",");
+                    if (xyz.length != 3) return "Die Strukturdatei ist unvollstaendig (Position " + i + ").";
+                    int x = Integer.parseInt(xyz[0].trim());
+                    int y = Integer.parseInt(xyz[1].trim());
+                    int z = Integer.parseInt(xyz[2].trim());
+                    if (Math.abs(x) > 256 || Math.abs(y) > 256 || Math.abs(z) > 256) {
+                        return "Die Struktur enthaelt ungueltig grosse Koordinaten.";
+                    }
+                    BlockPos offset = new BlockPos(x, y, z);
+                    if (!unique.add(offset)) return "Die Struktur enthaelt doppelte Blockpositionen.";
+                    offsets.add(offset);
+                }
+                if (!offsets.get(0).equals(BlockPos.ZERO)) {
+                    return "Die Strukturdatei hat keinen gueltigen Startpunkt.";
+                }
+                return BuildEngine.startStructure(client, offsets, MATERIALS.get(material));
+            } catch (IOException | NumberFormatException exception) {
+                return "Struktur konnte nicht geladen werden: " + exception.getMessage();
+            }
+        }
+
+        static String listStructures(Minecraft client) {
+            if (client == null) return "Minecraft ist noch nicht bereit.";
+            Path dir = directory(client);
+            if (!Files.isDirectory(dir)) return "Noch keine Blockstrukturen gespeichert.";
+            try (var files = Files.list(dir)) {
+                String names = files.filter(Files::isRegularFile)
+                        .map(path -> path.getFileName().toString())
+                        .filter(name -> name.endsWith(".obs"))
+                        .map(name -> name.substring(0, name.length() - 4))
+                        .sorted().limit(20).collect(Collectors.joining(", "));
+                return names.isEmpty() ? "Noch keine Blockstrukturen gespeichert."
+                        : "Gespeicherte Blockstrukturen: " + names;
+            } catch (IOException exception) {
+                return "Strukturliste konnte nicht gelesen werden: " + exception.getMessage();
+            }
+        }
+
+        static String deleteStructure(Minecraft client, String name) {
+            if (client == null || !validName(name)) {
+                return "Ungueltiger Name. Erlaubt: 1-32 Zeichen (A-Z, 0-9, _ oder -).";
+            }
+            try {
+                return Files.deleteIfExists(structureFile(client, name))
+                        ? "Struktur '" + name + "' geloescht."
+                        : "Struktur '" + name + "' wurde nicht gefunden.";
+            } catch (IOException exception) {
+                return "Struktur konnte nicht geloescht werden: " + exception.getMessage();
+            }
+        }
     }
 
     private static int clamp(int value, int min, int max) {
@@ -1340,6 +1469,67 @@ public final class OfflineBuilderClient implements ClientModInitializer {
                 redoAvailable = false;
                 restoreSelectedSlot(client);
             }
+        }
+
+        static List<BlockPos> lastStructureOffsets() {
+            if (lastCompleted.isEmpty()) return List.of();
+            BlockPos origin = lastCompleted.get(0);
+            List<BlockPos> offsets = new ArrayList<>(lastCompleted.size());
+            for (BlockPos pos : lastCompleted) {
+                offsets.add(new BlockPos(pos.getX() - origin.getX(),
+                        pos.getY() - origin.getY(), pos.getZ() - origin.getZ()));
+            }
+            return List.copyOf(offsets);
+        }
+
+        static Block lastStructureMaterial() {
+            return lastMaterial;
+        }
+
+        static String startStructure(Minecraft client, List<BlockPos> offsets, Block material) {
+            if (client == null || client.player == null || client.level == null || client.gameMode == null) {
+                return "Du musst in einer Welt sein.";
+            }
+            if (BlockBreaker.isActive() || !remaining.isEmpty() || historyMode != HistoryMode.NONE) {
+                return "Beende zuerst den laufenden Bau-, Abbau- oder Undo/Redo-Vorgang.";
+            }
+            if (offsets == null || offsets.isEmpty() || offsets.size() > maxBuildBlocks) {
+                return "Die Struktur hat keine oder zu viele Blockpositionen.";
+            }
+            BlockHitResult hit = currentBlockHit(client);
+            if (hit == null) return "Schau auf einen festen Block als neuen Startpunkt.";
+            BlockPos base = hit.getBlockPos().relative(hit.getDirection());
+            if (!offsets.get(0).equals(BlockPos.ZERO)) return "Die Struktur hat keinen gueltigen Startpunkt.";
+
+            List<BlockPos> translated = new ArrayList<>(offsets.size());
+            Set<BlockPos> unique = new HashSet<>();
+            for (BlockPos offset : offsets) {
+                BlockPos target = new BlockPos(base.getX() + offset.getX(),
+                        base.getY() + offset.getY(), base.getZ() + offset.getZ());
+                if (target.getY() < client.level.getMinY() || target.getY() >= client.level.getMaxY()) {
+                    return "Struktur liegt ausserhalb der Bauhoehe.";
+                }
+                if (!client.level.getBlockState(target).isAir()) {
+                    return "Strukturziel ist nicht frei bei " + target.toShortString();
+                }
+                if (!unique.add(target)) return "Die Struktur enthaelt doppelte Positionen.";
+                translated.add(target);
+            }
+
+            selectedBlock = material;
+            remaining.clear();
+            remaining.addAll(translated);
+            placed.clear();
+            originalAnchor = hit.getBlockPos();
+            originalFace = hit.getDirection();
+            total = translated.size();
+            originalSelectedSlot = client.player.getInventory().getSelectedSlot();
+            tickDelay = 0;
+            paused = false;
+            redoAvailable = false;
+            state = "Struktur-Bau laeuft: 0 / " + total
+                    + ". Material: " + material.getName().getString() + ".";
+            return state;
         }
 
         static void undo(Minecraft client) {
