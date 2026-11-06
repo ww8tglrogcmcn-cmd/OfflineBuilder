@@ -309,7 +309,7 @@ public final class OfflineBuilderClient implements ClientModInitializer {
                     Component.literal(BuildEngine.status()),
                     this.width / 2, this.height - 24, 0xFFFFFFFF);
             graphics.centeredText(this.font,
-                    Component.literal("Halte den passenden Block in der Haupthand."),
+                    Component.literal("Der passende Block muss in deiner Hotbar liegen."),
                     this.width / 2, this.height - 38, 0xFFAAAAAA);
         }
 
@@ -440,6 +440,7 @@ public final class OfflineBuilderClient implements ClientModInitializer {
         private static Block selectedBlock = Blocks.STONE_BRICKS;
         private static int total;
         private static int tickDelay;
+        private static int originalSelectedSlot;
         private static boolean paused;
         private static String state = "Bereit";
 
@@ -479,6 +480,7 @@ public final class OfflineBuilderClient implements ClientModInitializer {
             originalAnchor = hit.getBlockPos();
             originalFace = hit.getDirection();
             total = plan.size();
+            originalSelectedSlot = client.player.getInventory().getSelectedSlot();
             tickDelay = 0;
             paused = false;
             state = "Bau laeuft: 0 / " + total;
@@ -502,11 +504,15 @@ public final class OfflineBuilderClient implements ClientModInitializer {
                 return;
             }
 
-            if (client.player.getMainHandItem().isEmpty()
-                    || client.player.getMainHandItem().getItem() != selectedBlock.asItem()) {
-                cancelWith("Pausiert: " + selectedBlock.getName().getString()
-                        + " in die Haupthand legen und Bau erneut starten.");
+            int materialSlot = findMaterialHotbarSlot(client);
+            if (materialSlot < 0) {
+                paused = true;
+                state = "Pausiert: " + selectedBlock.getName().getString()
+                        + " fehlt in der Hotbar. Lege den Block dort ab und druecke Weiter.";
                 return;
+            }
+            if (materialSlot != client.player.getInventory().getSelectedSlot()) {
+                client.player.getInventory().setSelectedSlot(materialSlot);
             }
 
             BlockPos anchor = null;
@@ -544,7 +550,10 @@ public final class OfflineBuilderClient implements ClientModInitializer {
             remaining.remove();
             int done = placed.size();
             state = "Bau laeuft: " + done + " / " + total;
-            if (remaining.isEmpty()) state = "Fertig: " + total + " Bloecke gesetzt.";
+            if (remaining.isEmpty()) {
+                state = "Fertig: " + total + " Bloecke gesetzt.";
+                restoreSelectedSlot(client);
+            }
         }
 
         static void togglePause() {
@@ -571,12 +580,29 @@ public final class OfflineBuilderClient implements ClientModInitializer {
             remaining.clear();
             paused = false;
             state = "Bau abgebrochen nach " + placed.size() + " von " + total + " Bloecken.";
+            restoreSelectedSlot(Minecraft.getInstance());
+        }
+
+        private static int findMaterialHotbarSlot(Minecraft client) {
+            for (int slot = 0; slot < 9; slot++) {
+                var stack = client.player.getInventory().getItem(slot);
+                if (!stack.isEmpty() && stack.getItem() == selectedBlock.asItem()) return slot;
+            }
+            return -1;
+        }
+
+        private static void restoreSelectedSlot(Minecraft client) {
+            if (client != null && client.player != null && originalSelectedSlot >= 0
+                    && client.player.getInventory().getSelectedSlot() != originalSelectedSlot) {
+                client.player.getInventory().setSelectedSlot(originalSelectedSlot);
+            }
         }
 
         private static void cancelWith(String message) {
             remaining.clear();
             paused = false;
             state = message;
+            restoreSelectedSlot(Minecraft.getInstance());
         }
 
         static String status() {
