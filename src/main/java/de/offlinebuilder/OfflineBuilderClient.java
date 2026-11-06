@@ -89,7 +89,7 @@ public final class OfflineBuilderClient implements ClientModInitializer {
         String trimmed = raw.trim();
         String[] args = trimmed.isEmpty() ? new String[0] : trimmed.split("\\s+");
         if (args.length == 0 || args[0].equalsIgnoreCase("help")) {
-            tell(client, "Befehle: +menu | +break [cancel] | +build wall/floor/house/pillar/stairs/bridge/arch/cuboid/sphere/dome/cylinder/pyramid ... | +build pause/resume/cancel");
+            tell(client, "Befehle: +menu | +break [cancel] | +build wall/floor/house/pillar/stairs/bridge/arch/cuboid/sphere/dome/cylinder/pyramid ... | +build pause/resume/cancel/undo/redo");
             return;
         }
         if (args[0].equalsIgnoreCase("menu")) {
@@ -118,7 +118,13 @@ public final class OfflineBuilderClient implements ClientModInitializer {
         if (operation.equals("resume")) { BuildEngine.resume(); tell(client, BuildEngine.status()); return; }
         if (operation.equals("cancel")) { BuildEngine.cancel(); tell(client, BuildEngine.status()); return; }
         if (operation.equals("undo")) {
-            tell(client, "Rueckgaengig machen ist noch nicht in dieser Testversion enthalten.");
+            BuildEngine.undo(client);
+            tell(client, BuildEngine.status());
+            return;
+        }
+        if (operation.equals("redo")) {
+            BuildEngine.redo(client);
+            tell(client, BuildEngine.status());
             return;
         }
         if (operation.equals("preview")) {
@@ -688,6 +694,14 @@ public final class OfflineBuilderClient implements ClientModInitializer {
         private static int tickDelay;
         private static int originalSelectedSlot;
         private static boolean paused;
+        private enum HistoryMode { NONE, UNDO }
+        private static HistoryMode historyMode = HistoryMode.NONE;
+        private static final Queue<BlockPos> historyQueue = new ArrayDeque<>();
+        private static List<BlockPos> lastCompleted = List.of();
+        private static Block lastMaterial = Blocks.STONE_BRICKS;
+        private static BlockPos lastAnchor;
+        private static Direction lastFace;
+        private static boolean redoAvailable;
         private static String state = "Bereit";
 
         static void start(Minecraft client) {
@@ -733,8 +747,12 @@ public final class OfflineBuilderClient implements ClientModInitializer {
         }
 
         static void tick(Minecraft client) {
-            if (remaining.isEmpty() || paused || client == null || client.player == null
-                    || client.level == null || client.gameMode == null) return;
+            if (client == null || client.player == null || client.level == null || client.gameMode == null) return;
+            if (historyMode != HistoryMode.NONE) {
+                tickHistory(client);
+                return;
+            }
+            if (remaining.isEmpty() || paused) return;
             if (++tickDelay < 2) return;
             tickDelay = 0;
 
@@ -798,7 +816,102 @@ public final class OfflineBuilderClient implements ClientModInitializer {
             state = "Bau laeuft: " + done + " / " + total;
             if (remaining.isEmpty()) {
                 state = "Fertig: " + total + " Bloecke gesetzt.";
+                lastCompleted = List.copyOf(placed);
+                lastMaterial = selectedBlock;
+                lastAnchor = originalAnchor;
+                lastFace = originalFace;
+                redoAvailable = false;
                 restoreSelectedSlot(client);
+            }
+        }
+
+        static void undo(Minecraft client) {
+            if (client == null || client.player == null || client.level == null || client.gameMode == null) {
+                state = "Du musst in einer Welt sein.";
+                return;
+            }
+            if (!client.player.getAbilities().instabuild) {
+                state = "Undo ist in dieser Version zum Schutz deiner Survival-Welt nur im Kreativmodus verfuegbar.";
+                return;
+            }
+            if (!remaining.isEmpty() || historyMode != HistoryMode.NONE) {
+                state = "Beende zuerst den laufenden Bau- oder Rueckgaengig-Vorgang.";
+                return;
+            }
+            if (lastCompleted.isEmpty()) {
+                state = "Es gibt noch keinen abgeschlossenen Bau zum Rueckgaengigmachen.";
+                return;
+            }
+            historyQueue.clear();
+            for (int i = lastCompleted.size() - 1; i >= 0; i--) historyQueue.add(lastCompleted.get(i));
+            historyMode = HistoryMode.UNDO;
+            redoAvailable = false;
+            tickDelay = 0;
+            state = "Undo laeuft: " + historyQueue.size() + " Bloecke.";
+        }
+
+        static void redo(Minecraft client) {
+            if (client == null || client.player == null || client.level == null || client.gameMode == null) {
+                state = "Du musst in einer Welt sein.";
+                return;
+            }
+            if (!client.player.getAbilities().instabuild) {
+                state = "Redo ist in dieser Version zum Schutz deiner Survival-Welt nur im Kreativmodus verfuegbar.";
+                return;
+            }
+            if (!remaining.isEmpty() || historyMode != HistoryMode.NONE) {
+                state = "Beende zuerst den laufenden Bau- oder Rueckgaengig-Vorgang.";
+                return;
+            }
+            if (!redoAvailable || lastCompleted.isEmpty()) {
+                state = "Es gibt keinen Bau, den du wiederholen kannst.";
+                return;
+            }
+            for (BlockPos pos : lastCompleted) {
+                if (!client.level.getBlockState(pos).isAir()) {
+                    state = "Redo nicht moeglich: " + pos.toShortString() + " ist nicht frei.";
+                    return;
+                }
+            }
+            remaining.clear();
+            remaining.addAll(lastCompleted);
+            placed.clear();
+            selectedBlock = lastMaterial;
+            originalAnchor = lastAnchor;
+            originalFace = lastFace;
+            total = lastCompleted.size();
+            originalSelectedSlot = client.player.getInventory().getSelectedSlot();
+            tickDelay = 0;
+            paused = false;
+            redoAvailable = false;
+            state = "Redo laeuft: 0 / " + total + ". Das Material muss in der Hotbar liegen.";
+        }
+
+        private static void tickHistory(Minecraft client) {
+            if (++tickDelay < 2) return;
+            tickDelay = 0;
+            BlockPos pos = historyQueue.poll();
+            if (pos == null) {
+                historyMode = HistoryMode.NONE;
+                redoAvailable = true;
+                state = "Undo abgeschlossen. Mit +build redo kannst du den Bau wiederherstellen.";
+                return;
+            }
+            if (!client.level.getBlockState(pos).isAir()) {
+                boolean removed = client.gameMode.destroyBlock(pos);
+                if (!removed && !client.level.getBlockState(pos).isAir()) {
+                    historyQueue.clear();
+                    historyMode = HistoryMode.NONE;
+                    state = "Undo gestoppt: Server hat das Entfernen bei " + pos.toShortString() + " abgelehnt.";
+                    return;
+                }
+            }
+            state = "Undo laeuft: " + (lastCompleted.size() - historyQueue.size())
+                    + " / " + lastCompleted.size();
+            if (historyQueue.isEmpty()) {
+                historyMode = HistoryMode.NONE;
+                redoAvailable = true;
+                state = "Undo abgeschlossen. Mit +build redo kannst du den Bau wiederherstellen.";
             }
         }
 
@@ -819,6 +932,12 @@ public final class OfflineBuilderClient implements ClientModInitializer {
         }
 
         static void cancel() {
+            if (historyMode != HistoryMode.NONE) {
+                historyQueue.clear();
+                historyMode = HistoryMode.NONE;
+                state = "Undo abgebrochen.";
+                return;
+            }
             if (remaining.isEmpty()) {
                 state = "Kein Bauvorgang aktiv.";
                 return;
