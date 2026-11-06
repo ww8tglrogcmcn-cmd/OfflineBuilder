@@ -500,6 +500,8 @@ public final class OfflineBuilderClient implements ClientModInitializer {
 
         @Override
         protected void init() {
+            dimensionLabels.clear();
+            screenStatus = "";
             // All coordinates are GUI-scaled screen coordinates. Keep a consistent
             // centered panel and clamp every computed control width to at least 1 px.
             panelWidth = Math.max(1, Math.min(380, this.width - 24));
@@ -510,6 +512,10 @@ public final class OfflineBuilderClient implements ClientModInitializer {
             int halfA = Math.max(1, (panelWidth - gap) / 2);
             int halfB = Math.max(1, panelWidth - halfA - gap);
             int rowY = panelTop + 36;
+
+            addRenderableWidget(Button.builder(Component.literal("×"), b -> {
+                if (minecraft != null) minecraft.gui.setScreen(null);
+            }).bounds(panelLeft + Math.max(0, panelWidth - 24), panelTop + 7, 20, 20).build());
 
             // Row 1: shape and roof profile.
             addRenderableWidget(Button.builder(Component.literal("FORM  ·  " + shape.label + "  ▾"), b -> {
