@@ -118,7 +118,7 @@ public final class OfflineBuilderClient implements ClientModInitializer {
             return;
         }
         if (args.length < 2) {
-            tell(client, "Nutzung: +build <wall|floor|house|pillar|stairs|bridge|arch|cuboid|sphere|dome|cylinder|pyramid> ...");
+            tell(client, "Nutzung: +build <wall|floor|house|pillar|stairs|bridge|arch|circle|ring|cone|arena|tunnel|cuboid|sphere|dome|cylinder|pyramid> ...");
             return;
         }
         String operation = args[1].toLowerCase(Locale.ROOT);
@@ -179,6 +179,11 @@ public final class OfflineBuilderClient implements ClientModInitializer {
             case "stairs", "treppe", "treppen" -> shape = Shape.STAIRS;
             case "bridge", "bruecke", "brücke" -> shape = Shape.BRIDGE;
             case "arch", "bogen" -> shape = Shape.ARCH;
+            case "circle", "kreis" -> shape = Shape.CIRCLE;
+            case "ring" -> shape = Shape.RING;
+            case "cone", "kegel" -> shape = Shape.CONE;
+            case "arena" -> shape = Shape.ARENA;
+            case "tunnel" -> shape = Shape.TUNNEL;
             default -> { tell(client, "Unbekannte Form: " + operation + ". Nutze +help."); return; }
         }
 
@@ -206,7 +211,9 @@ public final class OfflineBuilderClient implements ClientModInitializer {
         }
         if (shape == Shape.WALL) parsedWidth = numberAfter(args, "length", parsedWidth);
         if (shape == Shape.FLOOR && parsedLength == length) parsedLength = parsedWidth;
-        if (shape == Shape.SPHERE || shape == Shape.DOME || shape == Shape.CYLINDER) {
+        if (shape == Shape.SPHERE || shape == Shape.DOME || shape == Shape.CYLINDER
+                || shape == Shape.CIRCLE || shape == Shape.RING || shape == Shape.CONE
+                || shape == Shape.ARENA) {
             parsedWidth = radius * 2 + 1;
             parsedLength = parsedWidth;
         }
@@ -264,7 +271,12 @@ public final class OfflineBuilderClient implements ClientModInitializer {
         PILLAR("Saeule"),
         STAIRS("Treppe"),
         BRIDGE("Bruecke"),
-        ARCH("Bogen");
+        ARCH("Bogen"),
+        CIRCLE("Kreis"),
+        RING("Ring"),
+        CONE("Kegel"),
+        ARENA("Arena"),
+        TUNNEL("Tunnel");
 
         final String label;
         Shape(String label) { this.label = label; }
@@ -658,6 +670,71 @@ public final class OfflineBuilderClient implements ClientModInitializer {
                                 if (!hollow || edge)
                                     add(all, base, right, forward, x + inset, y, z + inset);
                             }
+                    }
+                }
+                case CIRCLE -> {
+                    int radius = Math.max(1, width / 2);
+                    for (int z = -radius; z <= radius; z++)
+                        for (int x = 0; x <= radius * 2; x++) {
+                            int dx = x - radius;
+                            int d2 = dx * dx + z * z;
+                            boolean edge = d2 >= (radius - 1) * (radius - 1);
+                            if (d2 <= radius * radius && (!hollow || edge))
+                                add(all, base, right, forward, x, 0, z);
+                        }
+                }
+                case RING -> {
+                    int radius = Math.max(1, width / 2);
+                    int inner = Math.max(0, radius - 2);
+                    for (int z = -radius; z <= radius; z++)
+                        for (int x = 0; x <= radius * 2; x++) {
+                            int dx = x - radius;
+                            int d2 = dx * dx + z * z;
+                            if (d2 <= radius * radius && d2 >= inner * inner)
+                                add(all, base, right, forward, x, 0, z);
+                        }
+                }
+                case CONE -> {
+                    int radius = Math.max(1, width / 2);
+                    for (int y = 0; y < height; y++) {
+                        int layerRadius = Math.max(0, radius - (int) ((long) y * (radius + 1) / height));
+                        for (int z = -layerRadius; z <= layerRadius; z++)
+                            for (int x = 0; x <= layerRadius * 2; x++) {
+                                int dx = x - layerRadius;
+                                int d2 = dx * dx + z * z;
+                                boolean edge = d2 >= Math.max(0, layerRadius - 1) * Math.max(0, layerRadius - 1);
+                                if (d2 <= layerRadius * layerRadius && (!hollow || edge || y == 0))
+                                    add(all, base, right, forward, x - layerRadius, y, z);
+                            }
+                    }
+                }
+                case ARENA -> {
+                    int radius = Math.max(1, width / 2);
+                    int inner = Math.max(0, radius - 2);
+                    for (int y = 0; y < height; y++)
+                        for (int z = -radius; z <= radius; z++)
+                            for (int x = 0; x <= radius * 2; x++) {
+                                int dx = x - radius;
+                                int d2 = dx * dx + z * z;
+                                if (d2 <= radius * radius && d2 >= inner * inner)
+                                    add(all, base, right, forward, x - radius, y, z);
+                            }
+                }
+                case TUNNEL -> {
+                    int radius = Math.max(1, (width - 1) / 2);
+                    int center = (width - 1) / 2;
+                    int springLine = Math.max(1, height - radius - 1);
+                    for (int z = 0; z < length; z++) {
+                        for (int x = 0; x < width; x++) {
+                            if (x == 0 || x == width - 1) {
+                                for (int y = 0; y <= springLine; y++)
+                                    add(all, base, right, forward, x, y, z);
+                            }
+                            int dx = x - center;
+                            int arcY = springLine + (int) Math.round(Math.sqrt(
+                                    Math.max(0, radius * radius - dx * dx)));
+                            add(all, base, right, forward, x, arcY, z);
+                        }
                     }
                 }
                 case HOUSE -> {
