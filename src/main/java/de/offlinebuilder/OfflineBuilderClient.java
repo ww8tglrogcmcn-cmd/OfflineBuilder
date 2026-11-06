@@ -84,9 +84,7 @@ public final class OfflineBuilderClient implements ClientModInitializer {
         String trimmed = raw.trim();
         String[] args = trimmed.isEmpty() ? new String[0] : trimmed.split("\\s+");
         if (args.length == 0 || args[0].equalsIgnoreCase("help")) {
-            tell(client, "OfflineBuilder: +menu | +help | +build wall length 20 height 4 stone_bricks");
-            tell(client, "Weitere Beispiele: +build floor 20x20 oak_planks | +build sphere radius 8 glass");
-            tell(client, "Steuerung: +build pause | +build resume | +build cancel");
+            tell(client, "Befehl: +menu | +build wall length 20 height 4 stone_bricks | +build floor 20x20 oak_planks | +build sphere radius 8 glass | +build pause/resume/cancel");
             return;
         }
         if (args[0].equalsIgnoreCase("menu")) {
@@ -183,6 +181,7 @@ public final class OfflineBuilderClient implements ClientModInitializer {
 
     private static void tell(Minecraft client, String message) {
         uiStatus = message;
+        BuildEngine.state = message;
         if (client.player != null) client.gui.setScreen(new BuilderScreen());
     }
 
