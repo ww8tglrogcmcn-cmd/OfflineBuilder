@@ -694,11 +694,11 @@ public final class OfflineBuilderClient implements ClientModInitializer {
                 || client.player.containerMenu != client.player.inventoryMenu) return -1;
         for (int hotbarSlot = 0; hotbarSlot < 9; hotbarSlot++) {
             if (client.player.getInventory().getItem(hotbarSlot).isEmpty()) {
-                client.gameMode.handleInventoryMouseClick(
+                client.gameMode.handleContainerInput(
                         client.player.inventoryMenu.containerId,
                         sourceSlot,
                         hotbarSlot,
-                        net.minecraft.world.inventory.ClickType.SWAP,
+                        net.minecraft.world.inventory.ContainerInput.SWAP,
                         client.player);
                 return hotbarSlot;
             }
