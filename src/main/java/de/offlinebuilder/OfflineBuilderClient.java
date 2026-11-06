@@ -71,6 +71,7 @@ public final class OfflineBuilderClient implements ClientModInitializer {
                     client.gui.setScreen(new BuilderScreen());
                 }
             }
+            BlockBreaker.tick(client);
             BuildEngine.tick(client);
         });
 
@@ -88,11 +89,20 @@ public final class OfflineBuilderClient implements ClientModInitializer {
         String trimmed = raw.trim();
         String[] args = trimmed.isEmpty() ? new String[0] : trimmed.split("\\s+");
         if (args.length == 0 || args[0].equalsIgnoreCase("help")) {
-            tell(client, "Befehl: +menu | +build wall length 20 height 4 stone_bricks | +build floor 20x20 oak_planks | +build sphere radius 8 glass | +build pause/resume/cancel");
+            tell(client, "Befehle: +menu | +break [cancel] | +build wall/floor/house/cuboid/sphere/dome/cylinder/pyramid ... | +build pause/resume/cancel");
             return;
         }
         if (args[0].equalsIgnoreCase("menu")) {
             if (client.gui.screen() == null) client.gui.setScreen(new BuilderScreen());
+            return;
+        }
+        if (args[0].equalsIgnoreCase("break")) {
+            if (args.length > 1 && (args[1].equalsIgnoreCase("cancel") || args[1].equalsIgnoreCase("stop"))) {
+                BlockBreaker.cancel(client);
+            } else {
+                BlockBreaker.start(client);
+            }
+            tell(client, BlockBreaker.status());
             return;
         }
         if (!args[0].equalsIgnoreCase("build")) {
@@ -100,7 +110,7 @@ public final class OfflineBuilderClient implements ClientModInitializer {
             return;
         }
         if (args.length < 2) {
-            tell(client, "Nutzung: +build <wall|floor|cuboid|sphere|dome|cylinder|pyramid> ...");
+            tell(client, "Nutzung: +build <wall|floor|house|cuboid|sphere|dome|cylinder|pyramid> ...");
             return;
         }
         String operation = args[1].toLowerCase(Locale.ROOT);
@@ -128,7 +138,7 @@ public final class OfflineBuilderClient implements ClientModInitializer {
             case "dome", "kuppel" -> shape = Shape.DOME;
             case "cylinder", "zylinder" -> shape = Shape.CYLINDER;
             case "pyramid", "pyramide" -> shape = Shape.PYRAMID;
-            case "house", "haus" -> { tell(client, "Der Hausgenerator folgt in einer spaeteren Ausbaustufe."); return; }
+            case "house", "haus" -> shape = Shape.HOUSE;
             default -> { tell(client, "Unbekannte Form: " + operation + ". Nutze +help."); return; }
         }
 
@@ -198,7 +208,8 @@ public final class OfflineBuilderClient implements ClientModInitializer {
         SPHERE("Kugel"),
         DOME("Kuppel"),
         CYLINDER("Zylinder"),
-        PYRAMID("Pyramide");
+        PYRAMID("Pyramide"),
+        HOUSE("Haus");
 
         final String label;
         Shape(String label) { this.label = label; }
@@ -443,7 +454,7 @@ public final class OfflineBuilderClient implements ClientModInitializer {
                 }
                 case PYRAMID -> {
                     for (int y = 0; y < height; y++) {
-                        int inset = hollow ? y : y;
+                        int inset = y;
                         int xMax = Math.max(0, width - 1 - inset * 2);
                         int zMax = Math.max(0, length - 1 - inset * 2);
                         for (int z = 0; z <= zMax; z++)
@@ -452,6 +463,23 @@ public final class OfflineBuilderClient implements ClientModInitializer {
                                 if (!hollow || edge)
                                     add(all, base, right, forward, x + inset, y, z + inset);
                             }
+                    }
+                }
+                case HOUSE -> {
+                    // A simple hollow rectangular shell: solid floor and roof, perimeter walls.
+                    for (int z = 0; z < length; z++) {
+                        for (int x = 0; x < width; x++) {
+                            add(all, base, right, forward, x, 0, z);
+                            if (height > 1) add(all, base, right, forward, x, height - 1, z);
+                            for (int y = 1; y < height - 1; y++) {
+                                if (x == 0 || x == width - 1 || z == 0 || z == length - 1) {
+                                    // Leave a two-block-high doorway in the middle of the front wall.
+                                    boolean doorway = z == 0 && x >= width / 2 - 1
+                                            && x <= width / 2 && y <= 2;
+                                    if (!doorway) add(all, base, right, forward, x, y, z);
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -479,6 +507,119 @@ public final class OfflineBuilderClient implements ClientModInitializer {
             int dx = right.getStepX() * x + forward.getStepX() * z;
             int dz = right.getStepZ() * x + forward.getStepZ() * z;
             positions.add(base.offset(dx, y, dz));
+        }
+    }
+
+    /**
+     * Optional one-block mining helper. It uses the normal client game-mode mining calls,
+     * so server permissions, reach and mining rules remain authoritative.
+     */
+    private static final class BlockBreaker {
+        private static BlockPos target;
+        private static Direction face;
+        private static int previousSlot = -1;
+        private static boolean active;
+        private static String state = "Abbau bereit";
+
+        static void start(Minecraft client) {
+            if (client == null || client.player == null || client.level == null || client.gameMode == null) {
+                state = "Du musst in einer Welt sein.";
+                return;
+            }
+            if (active) {
+                state = "Ein Abbau laeuft bereits. Nutze +break cancel zum Stoppen.";
+                return;
+            }
+            BlockHitResult hit = currentBlockHit(client);
+            if (hit == null) {
+                state = "Schau zuerst auf einen Block.";
+                return;
+            }
+            BlockState blockState = client.level.getBlockState(hit.getBlockPos());
+            if (blockState.isAir()) {
+                state = "Dort ist kein abbaubarer Block.";
+                return;
+            }
+
+            previousSlot = client.player.getInventory().getSelectedSlot();
+            int toolSlot = bestPickaxeSlot(client, blockState);
+            if (toolSlot >= 0 && toolSlot != previousSlot) {
+                client.player.getInventory().setSelectedSlot(toolSlot);
+            }
+            target = hit.getBlockPos().immutable();
+            face = hit.getDirection();
+            boolean started = client.gameMode.startDestroyBlock(target, face);
+            if (!started) {
+                restoreSlot(client);
+                state = "Der Abbau konnte nicht gestartet werden.";
+                return;
+            }
+            active = true;
+            state = toolSlot >= 0
+                    ? "Abbau gestartet. Passende Spitzhacke ausgewaehlt."
+                    : "Abbau gestartet. Keine Spitzhacke in der Hotbar gefunden.";
+        }
+
+        static void tick(Minecraft client) {
+            if (!active) return;
+            if (client == null || client.player == null || client.level == null || client.gameMode == null) {
+                active = false;
+                return;
+            }
+            if (!client.level.hasChunkAt(target) || client.level.getBlockState(target).isAir()) {
+                finish(client, "Block abgebaut.");
+                return;
+            }
+            client.gameMode.continueDestroyBlock(target, face);
+            if (client.level.getBlockState(target).isAir()) {
+                finish(client, "Block abgebaut.");
+            }
+        }
+
+        static void cancel(Minecraft client) {
+            if (!active) {
+                state = "Kein Abbau aktiv.";
+                return;
+            }
+            if (client != null && client.gameMode != null) client.gameMode.stopDestroyBlock();
+            active = false;
+            restoreSlot(client);
+            state = "Abbau gestoppt.";
+        }
+
+        private static int bestPickaxeSlot(Minecraft client, BlockState state) {
+            int best = -1;
+            float bestSpeed = 0.0F;
+            for (int slot = 0; slot < 9; slot++) {
+                var stack = client.player.getInventory().getItem(slot);
+                if (stack.isEmpty()) continue;
+                var itemId = BuiltInRegistries.ITEM.getKey(stack.getItem());
+                if (itemId == null || !itemId.getPath().endsWith("_pickaxe")) continue;
+                float speed = stack.getDestroySpeed(state);
+                if (speed > bestSpeed) {
+                    bestSpeed = speed;
+                    best = slot;
+                }
+            }
+            return best;
+        }
+
+        private static void finish(Minecraft client, String message) {
+            if (client.gameMode != null) client.gameMode.stopDestroyBlock();
+            active = false;
+            restoreSlot(client);
+            state = message;
+        }
+
+        private static void restoreSlot(Minecraft client) {
+            if (client != null && client.player != null && previousSlot >= 0) {
+                client.player.getInventory().setSelectedSlot(previousSlot);
+            }
+            previousSlot = -1;
+        }
+
+        static String status() {
+            return state;
         }
     }
 
