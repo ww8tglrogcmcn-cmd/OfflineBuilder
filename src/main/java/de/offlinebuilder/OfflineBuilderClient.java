@@ -65,6 +65,7 @@ public final class OfflineBuilderClient implements ClientModInitializer {
     private static int length = 8;
     private static int height = 4;
     private static boolean hollow = false;
+    private static RoofStyle roofStyle = RoofStyle.GABLE;
     private static String uiStatus = "Bereit. B druecken, um OfflineBuilder zu oeffnen.";
 
     @Override
@@ -181,6 +182,17 @@ public final class OfflineBuilderClient implements ClientModInitializer {
             default -> { tell(client, "Unbekannte Form: " + operation + ". Nutze +help."); return; }
         }
 
+        for (int i = 0; i + 1 < args.length; i++) {
+            if (args[i].equalsIgnoreCase("roof")) {
+                RoofStyle parsedRoof = RoofStyle.parse(args[i + 1]);
+                if (parsedRoof == null) {
+                    tell(client, "Dachform: flat, gable, hip oder shed.");
+                    return;
+                }
+                roofStyle = parsedRoof;
+            }
+        }
+
         int parsedWidth = numberAfter(args, "width", width);
         int parsedLength = numberAfter(args, "length", length);
         int parsedHeight = numberAfter(args, "height", height);
@@ -259,6 +271,27 @@ public final class OfflineBuilderClient implements ClientModInitializer {
         Shape next() { return values()[(ordinal() + 1) % values().length]; }
     }
 
+    private enum RoofStyle {
+        FLAT("Flachdach"),
+        GABLE("Satteldach"),
+        HIP("Walmdach"),
+        SHED("Pultdach");
+
+        final String label;
+        RoofStyle(String label) { this.label = label; }
+        RoofStyle next() { return values()[(ordinal() + 1) % values().length]; }
+
+        static RoofStyle parse(String value) {
+            return switch (value.toLowerCase(Locale.ROOT)) {
+                case "flat", "flach" -> FLAT;
+                case "gable", "sattel" -> GABLE;
+                case "hip", "walm" -> HIP;
+                case "shed", "pult" -> SHED;
+                default -> null;
+            };
+        }
+    }
+
 
     private static final class MaterialScreen extends Screen {
         private final Screen parent;
@@ -328,10 +361,15 @@ public final class OfflineBuilderClient implements ClientModInitializer {
             panelTop = Math.max(0, y - 22);
             panelBottom = Math.min(this.height, y + 246);
 
+            int formWidth = Math.max(1, (panelWidth - 5) / 2);
             addRenderableWidget(Button.builder(Component.literal("Form: " + shape.label + "  ›"), b -> {
                 shape = shape.next();
                 rebuildWidgets();
-            }).bounds(left, y, panelWidth, 20).build());
+            }).bounds(left, y, formWidth, 20).build());
+            addRenderableWidget(Button.builder(Component.literal("Dach: " + roofStyle.label), b -> {
+                roofStyle = roofStyle.next();
+                rebuildWidgets();
+            }).bounds(left + formWidth + 5, y, panelWidth - formWidth - 5, 20).build());
             y += 28;
 
             addDimensionRow(left, y, "Breite", 0);
@@ -466,6 +504,7 @@ public final class OfflineBuilderClient implements ClientModInitializer {
                 data.setProperty("length", Integer.toString(length));
                 data.setProperty("height", Integer.toString(height));
                 data.setProperty("hollow", Boolean.toString(hollow));
+                data.setProperty("roof", roofStyle.name());
                 data.setProperty("material", id == null ? "minecraft:stone_bricks" : id.toString());
                 try (OutputStream output = Files.newOutputStream(file(client, name))) {
                     data.store(output, "OfflineBuilder local blueprint preset");
@@ -486,12 +525,14 @@ public final class OfflineBuilderClient implements ClientModInitializer {
                 Properties data = new Properties();
                 data.load(input);
                 Shape loadedShape = Shape.valueOf(data.getProperty("shape", "WALL"));
+                RoofStyle loadedRoof = RoofStyle.valueOf(data.getProperty("roof", "GABLE"));
                 int loadedMaterial = materialIndex(data.getProperty("material", "minecraft:stone_bricks"));
                 if (loadedMaterial < 0) return "Das gespeicherte Material ist in dieser Minecraft-Installation nicht verfuegbar.";
                 int loadedWidth = clamp(Integer.parseInt(data.getProperty("width", "8")), 1, 48);
                 int loadedLength = clamp(Integer.parseInt(data.getProperty("length", "8")), 1, 48);
                 int loadedHeight = clamp(Integer.parseInt(data.getProperty("height", "4")), 1, 48);
                 shape = loadedShape;
+                roofStyle = loadedRoof;
                 materialIndex = loadedMaterial;
                 width = loadedWidth;
                 length = loadedLength;
@@ -620,16 +661,42 @@ public final class OfflineBuilderClient implements ClientModInitializer {
                     }
                 }
                 case HOUSE -> {
-                    // A simple hollow rectangular shell: solid floor and roof, perimeter walls.
+                    // Hollow rectangular house shell with selectable roof geometry.
+                    int hipRise = Math.max(0, Math.min((width - 1) / 2, (length - 1) / 2));
+                    int shedRise = Math.max(1, width / 3);
                     for (int z = 0; z < length; z++) {
                         for (int x = 0; x < width; x++) {
                             add(all, base, right, forward, x, 0, z);
-                            if (height > 1) add(all, base, right, forward, x, height - 1, z);
                             for (int y = 1; y < height - 1; y++) {
                                 if (x == 0 || x == width - 1 || z == 0 || z == length - 1) {
                                     boolean doorway = z == 0 && x >= width / 2 - 1
                                             && x <= width / 2 && y <= 2;
                                     if (!doorway) add(all, base, right, forward, x, y, z);
+                                }
+                            }
+
+                            switch (roofStyle) {
+                                case FLAT -> add(all, base, right, forward, x, height - 1, z);
+                                case GABLE -> {
+                                    int rise = Math.min(x, width - 1 - x);
+                                    int roofY = height - 1 + rise;
+                                    add(all, base, right, forward, x, roofY, z);
+                                    if (z == 0 || z == length - 1) {
+                                        for (int y = height - 1; y < roofY; y++)
+                                            add(all, base, right, forward, x, y, z);
+                                    }
+                                }
+                                case SHED -> {
+                                    int roofY = height - 1 + (x * shedRise) / Math.max(1, width - 1);
+                                    add(all, base, right, forward, x, roofY, z);
+                                }
+                                case HIP -> {
+                                    for (int level = 0; level <= hipRise; level++) {
+                                        if (x >= level && x < width - level
+                                                && z >= level && z < length - level) {
+                                            add(all, base, right, forward, x, height - 1 + level, z);
+                                        }
+                                    }
                                 }
                             }
                         }
