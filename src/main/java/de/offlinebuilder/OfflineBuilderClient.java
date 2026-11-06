@@ -33,6 +33,13 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Queue;
 import java.util.Set;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Properties;
+import java.util.stream.Collectors;
 
 /**
  * OfflineBuilder client entry point.
@@ -89,7 +96,7 @@ public final class OfflineBuilderClient implements ClientModInitializer {
         String trimmed = raw.trim();
         String[] args = trimmed.isEmpty() ? new String[0] : trimmed.split("\\s+");
         if (args.length == 0 || args[0].equalsIgnoreCase("help")) {
-            tell(client, "Befehle: +menu | +break [cancel] | +build wall/floor/house/pillar/stairs/bridge/arch/cuboid/sphere/dome/cylinder/pyramid ... | +build pause/resume/cancel/undo/redo");
+            tell(client, "Befehle: +menu | +break [cancel] | +build <form> ... | +build save/load/list/delete <name> | +build pause/resume/cancel/undo/redo");
             return;
         }
         if (args[0].equalsIgnoreCase("menu")) {
@@ -125,6 +132,28 @@ public final class OfflineBuilderClient implements ClientModInitializer {
         if (operation.equals("redo")) {
             BuildEngine.redo(client);
             tell(client, BuildEngine.status());
+            return;
+        }
+        if (operation.equals("save") || operation.equals("export")) {
+            tell(client, args.length > 2
+                    ? BlueprintStore.save(client, args[2])
+                    : "Nutzung: +build save <name>");
+            return;
+        }
+        if (operation.equals("load") || operation.equals("import")) {
+            tell(client, args.length > 2
+                    ? BlueprintStore.load(client, args[2])
+                    : "Nutzung: +build load <name>");
+            return;
+        }
+        if (operation.equals("delete")) {
+            tell(client, args.length > 2
+                    ? BlueprintStore.delete(client, args[2])
+                    : "Nutzung: +build delete <name>");
+            return;
+        }
+        if (operation.equals("list")) {
+            tell(client, BlueprintStore.list(client));
             return;
         }
         if (operation.equals("preview")) {
@@ -405,6 +434,104 @@ public final class OfflineBuilderClient implements ClientModInitializer {
         @Override
         public boolean isPauseScreen() {
             return false;
+        }
+    }
+
+    /** Local, offline presets for the current shape, dimensions and material. */
+    private static final class BlueprintStore {
+        private static Path directory(Minecraft client) {
+            return client.gameDirectory.toPath().resolve("config")
+                    .resolve("offlinebuilder").resolve("blueprints");
+        }
+
+        private static boolean validName(String name) {
+            return name != null && name.matches("[A-Za-z0-9_-]{1,32}");
+        }
+
+        private static Path file(Minecraft client, String name) {
+            return directory(client).resolve(name + ".obp").normalize();
+        }
+
+        static String save(Minecraft client, String name) {
+            if (client == null || !validName(name)) {
+                return "Ungueltiger Name. Erlaubt: 1-32 Zeichen (A-Z, 0-9, _ oder -).";
+            }
+            try {
+                Files.createDirectories(directory(client));
+                Block material = MATERIALS.get(Math.floorMod(materialIndex, MATERIALS.size()));
+                var id = BuiltInRegistries.BLOCK.getKey(material);
+                Properties data = new Properties();
+                data.setProperty("shape", shape.name());
+                data.setProperty("width", Integer.toString(width));
+                data.setProperty("length", Integer.toString(length));
+                data.setProperty("height", Integer.toString(height));
+                data.setProperty("hollow", Boolean.toString(hollow));
+                data.setProperty("material", id == null ? "minecraft:stone_bricks" : id.toString());
+                try (OutputStream output = Files.newOutputStream(file(client, name))) {
+                    data.store(output, "OfflineBuilder local blueprint preset");
+                }
+                return "Preset '" + name + "' lokal gespeichert.";
+            } catch (IOException exception) {
+                return "Speichern fehlgeschlagen: " + exception.getMessage();
+            }
+        }
+
+        static String load(Minecraft client, String name) {
+            if (client == null || !validName(name)) {
+                return "Ungueltiger Name. Erlaubt: 1-32 Zeichen (A-Z, 0-9, _ oder -).";
+            }
+            Path path = file(client, name);
+            if (!Files.isRegularFile(path)) return "Preset '" + name + "' wurde nicht gefunden.";
+            try (InputStream input = Files.newInputStream(path)) {
+                Properties data = new Properties();
+                data.load(input);
+                Shape loadedShape = Shape.valueOf(data.getProperty("shape", "WALL"));
+                int loadedMaterial = materialIndex(data.getProperty("material", "minecraft:stone_bricks"));
+                if (loadedMaterial < 0) return "Das gespeicherte Material ist in dieser Minecraft-Installation nicht verfuegbar.";
+                int loadedWidth = clamp(Integer.parseInt(data.getProperty("width", "8")), 1, 48);
+                int loadedLength = clamp(Integer.parseInt(data.getProperty("length", "8")), 1, 48);
+                int loadedHeight = clamp(Integer.parseInt(data.getProperty("height", "4")), 1, 48);
+                shape = loadedShape;
+                materialIndex = loadedMaterial;
+                width = loadedWidth;
+                length = loadedLength;
+                height = loadedHeight;
+                hollow = Boolean.parseBoolean(data.getProperty("hollow", "false"));
+                return "Preset '" + name + "' geladen: " + shape.label + " "
+                        + width + "x" + length + "x" + height + ".";
+            } catch (IOException | IllegalArgumentException exception) {
+                return "Laden fehlgeschlagen: " + exception.getMessage();
+            }
+        }
+
+        static String list(Minecraft client) {
+            if (client == null) return "Minecraft ist noch nicht bereit.";
+            Path dir = directory(client);
+            if (!Files.isDirectory(dir)) return "Noch keine lokalen Presets gespeichert.";
+            try (var files = Files.list(dir)) {
+                String names = files.filter(Files::isRegularFile)
+                        .map(path -> path.getFileName().toString())
+                        .filter(name -> name.endsWith(".obp"))
+                        .map(name -> name.substring(0, name.length() - 4))
+                        .sorted().limit(20).collect(Collectors.joining(", "));
+                return names.isEmpty() ? "Noch keine lokalen Presets gespeichert."
+                        : "Lokale Presets: " + names;
+            } catch (IOException exception) {
+                return "Liste konnte nicht gelesen werden: " + exception.getMessage();
+            }
+        }
+
+        static String delete(Minecraft client, String name) {
+            if (client == null || !validName(name)) {
+                return "Ungueltiger Name. Erlaubt: 1-32 Zeichen (A-Z, 0-9, _ oder -).";
+            }
+            try {
+                return Files.deleteIfExists(file(client, name))
+                        ? "Preset '" + name + "' geloescht."
+                        : "Preset '" + name + "' wurde nicht gefunden.";
+            } catch (IOException exception) {
+                return "Loeschen fehlgeschlagen: " + exception.getMessage();
+            }
         }
     }
 
