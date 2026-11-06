@@ -14,6 +14,7 @@ Offline-first Fabric client mod for Minecraft Java 26.3 (Java 25).
 - Start a one-block mining action with the command prefix followed by `break`. The helper searches for a suitable pickaxe in the hotbar and main inventory, moves it to an empty hotbar slot if available, selects it and restores the previously selected slot when finished. Stop with `break cancel`.
 - Undo the last completed build with `build undo` and repeat it with `build redo`. This first implementation is Creative-only and processes blocks gradually.
 - Local build presets: `build save <name>`, `build load <name>`, `build list`, `build delete <name>`. A preset stores shape, dimensions, material, hollow mode and roof style.
+- Local relative structure files: `build saveblocks <name>`, `build loadblocks <name>`, `build listblocks`, `build deleteblocks <name>`. These save the last completed build's relative block positions and one material in a local `.obs` file, then rebuild it at the block currently being targeted. They do not yet preserve multiple materials, block-state properties, inventories or block-entity data.
 - Local settings: configurable command prefix, maximum block count and build interval. Values are stored in `config/offlinebuilder/settings.properties`.
 - The builder screen is non-pausing, so a running build continues when the menu is closed.
 
@@ -47,7 +48,7 @@ This remains an in-progress test implementation, not the complete mod requested 
 
 - The preview is currently a block-count calculation, not a 3D ghost preview with movable placement controls.
 - The house option is a simple one-material shell with four roof profiles; it is not yet a full building generator with rooms, windows, doors as separate blocks, interiors, styles or multiple materials.
-- Local presets are shape/configuration presets, not full world-coordinate block blueprints or structure-file imports.
+- Relative structure files can reproduce the last completed single-material build at a new anchor, but they are not full Minecraft structure files: multi-material blocks, block-state properties, block entities, orientation editing and arbitrary imported structure formats are not preserved.
 - Undo/redo is Creative-only. Survival undo, persistent multi-step history and restoration of replaced blocks are not implemented.
 - The mining helper targets one block at a time. It is not a continuous mining assistant.
 - There is no multi-material palette, global block replacement, random-material tool, garden/interior/decorations generator, or complete building catalogue.
