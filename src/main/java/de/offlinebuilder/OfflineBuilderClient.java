@@ -188,7 +188,7 @@ public final class OfflineBuilderClient implements ClientModInitializer {
     private static void tell(Minecraft client, String message) {
         uiStatus = message;
         BuildEngine.state = message;
-        if (client.player != null) client.player.displayClientMessage(Component.literal("[OfflineBuilder] " + message), false);
+        if (client.player != null) client.player.sendSystemMessage(Component.literal("[OfflineBuilder] " + message));
     }
 
     private enum Shape {
@@ -233,13 +233,13 @@ public final class OfflineBuilderClient implements ClientModInitializer {
                 Block block = found.get(i); int index = MATERIALS.indexOf(block);
                 String id = String.valueOf(BuiltInRegistries.BLOCK.getKey(block));
                 addRenderableWidget(Button.builder(Component.literal(block.getName().getString() + " [" + id + "]"), b -> {
-                    materialIndex = index; minecraft.setScreen(parent);
+                    materialIndex = index; minecraft.gui.setScreen(parent);
                 }).bounds(left, 62 + (i - page * PAGE_SIZE) * 26, w, 22).build());
             }
             addRenderableWidget(Button.builder(Component.literal("<"), b -> { page = Math.max(0,page-1); rebuildWidgets(); }).bounds(left, height-55, 40, 20).build());
             addRenderableWidget(Button.builder(Component.literal("Seite " + (page+1) + "/" + pages + " - " + found.size() + " Treffer"), b -> {}).bounds(left+44,height-55,w-88,20).build());
             addRenderableWidget(Button.builder(Component.literal(">"), b -> { page = Math.min(pages-1,page+1); rebuildWidgets(); }).bounds(left+w-40,height-55,40,20).build());
-            addRenderableWidget(Button.builder(Component.literal("Zurueck"), b -> minecraft.setScreen(parent)).bounds(left,height-28,w,20).build());
+            addRenderableWidget(Button.builder(Component.literal("Zurueck"), b -> minecraft.gui.setScreen(parent)).bounds(left,height-28,w,20).build());
             setInitialFocus(search);
         }
         @Override public void extractRenderState(GuiGraphicsExtractor graphics,int mouseX,int mouseY,float delta) {
@@ -280,7 +280,7 @@ public final class OfflineBuilderClient implements ClientModInitializer {
 
             addRenderableWidget(Button.builder(
                     Component.literal("Material suchen / auswaehlen  (" + MATERIALS.size() + ")"),
-                    b -> this.minecraft.setScreen(new MaterialScreen(this))).bounds(left, y, panelWidth, 20).build());
+                    b -> this.minecraft.gui.setScreen(new MaterialScreen(this))).bounds(left, y, panelWidth, 20).build());
             y += 27;
 
             addRenderableWidget(Button.builder(
