@@ -586,27 +586,28 @@ public final class OfflineBuilderClient implements ClientModInitializer {
 
         private void addDimensionInput(String label, int value, int x, int labelY,
                                        int fieldWidth, int fieldY, int which) {
-            graphicsLabel(label, x, labelY);
+            graphicsLabel(label, x, labelY, fieldWidth);
             EditBox field = new EditBox(font, x, fieldY, Math.max(1, fieldWidth), 22,
                     Component.literal(label));
             field.setValue(Integer.toString(value));
             field.setMaxLength(2);
-            field.setFilter(text -> text.isEmpty() || text.matches("\\d{0,2}"));
+            // Numeric validation happens when Preview or Build is pressed; 26.3 EditBox
+            // intentionally keeps the vanilla text editing behaviour.
             if (which == 0) widthInput = field;
             else if (which == 1) lengthInput = field;
             else heightInput = field;
             addRenderableWidget(field);
         }
 
-        private void graphicsLabel(String label, int x, int y) {
+        private void graphicsLabel(String label, int x, int y, int labelWidth) {
             // Labels are drawn in extractRenderState below so they remain crisp and
             // independent of widget focus and mouse state.
-            dimensionLabels.add(new DimensionLabel(label, x, y));
+            dimensionLabels.add(new DimensionLabel(label, x, y, labelWidth));
         }
 
         private final List<DimensionLabel> dimensionLabels = new ArrayList<>();
 
-        private record DimensionLabel(String text, int x, int y) {}
+        private record DimensionLabel(String text, int x, int y, int width) {}
 
         private boolean commitDimensions() {
             Integer newWidth = parseDimension(widthInput, "Breite");
@@ -678,7 +679,8 @@ public final class OfflineBuilderClient implements ClientModInitializer {
             graphics.centeredText(font, Component.literal("Formen bauen  ·  lokal  ·  ohne Cloud"),
                     width / 2, panelTop + 24, MUTED);
             for (DimensionLabel label : dimensionLabels) {
-                graphics.drawString(font, label.text(), label.x(), label.y(), MUTED);
+                graphics.centeredText(font, Component.literal(label.text()),
+                        label.x() + label.width() / 2, label.y(), MUTED);
             }
 
             int footerY = Math.min(height - 17, panelBottom - 15);
