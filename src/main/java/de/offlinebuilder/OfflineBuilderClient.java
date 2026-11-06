@@ -59,6 +59,9 @@ public final class OfflineBuilderClient implements ClientModInitializer {
             .toList();
     private static int materialIndex = 0;
     private static String materialSearch = "";
+    private static String commandPrefix = "+";
+    private static int maxBuildBlocks = 12000;
+    private static int buildDelayTicks = 2;
 
     private static Shape shape = Shape.WALL;
     private static int width = 8;
@@ -70,6 +73,7 @@ public final class OfflineBuilderClient implements ClientModInitializer {
 
     @Override
     public void onInitializeClient() {
+        SettingsStore.load(Minecraft.getInstance());
         openMenuKey = KeyMappingHelper.registerKeyMapping(new KeyMapping(
                 "key.offlinebuilder.open", InputConstants.KEY_B, CATEGORY));
 
@@ -84,8 +88,8 @@ public final class OfflineBuilderClient implements ClientModInitializer {
         });
 
         ClientSendMessageEvents.ALLOW_CHAT.register(message -> {
-            if (!message.startsWith("+")) return true;
-            handleBuilderCommand(message.substring(1));
+            if (!message.startsWith(commandPrefix)) return true;
+            handleBuilderCommand(message.substring(commandPrefix.length()));
             return false;
         });
     }
@@ -97,7 +101,13 @@ public final class OfflineBuilderClient implements ClientModInitializer {
         String trimmed = raw.trim();
         String[] args = trimmed.isEmpty() ? new String[0] : trimmed.split("\\s+");
         if (args.length == 0 || args[0].equalsIgnoreCase("help")) {
-            tell(client, "Befehle: +menu | +break [cancel] | +build <form> ... | +build save/load/list/delete <name> | +build pause/resume/cancel/undo/redo");
+            tell(client, "Prefix: " + commandPrefix + " | Befehle: " + commandPrefix
+                    + "menu | " + commandPrefix + "break | " + commandPrefix
+                    + "build <form> ... | " + commandPrefix + "settings show");
+            return;
+        }
+        if (args[0].equalsIgnoreCase("settings")) {
+            tell(client, SettingsStore.handle(client, args));
             return;
         }
         if (args[0].equalsIgnoreCase("menu")) {
@@ -484,6 +494,83 @@ public final class OfflineBuilderClient implements ClientModInitializer {
         @Override
         public boolean isPauseScreen() {
             return false;
+        }
+    }
+
+    /** Persisted local settings; no network or cloud access. */
+    private static final class SettingsStore {
+        private static Path file(Minecraft client) {
+            return client.gameDirectory.toPath().resolve("config")
+                    .resolve("offlinebuilder").resolve("settings.properties");
+        }
+
+        static void load(Minecraft client) {
+            if (client == null || !Files.isRegularFile(file(client))) return;
+            try (InputStream input = Files.newInputStream(file(client))) {
+                Properties data = new Properties();
+                data.load(input);
+                commandPrefix = data.getProperty("prefix", "+");
+                if (commandPrefix.isBlank() || commandPrefix.length() > 3
+                        || commandPrefix.contains("/") || commandPrefix.chars().anyMatch(Character::isWhitespace)) {
+                    commandPrefix = "+";
+                }
+                maxBuildBlocks = clamp(Integer.parseInt(data.getProperty("maxBlocks", "12000")), 100, 50000);
+                buildDelayTicks = clamp(Integer.parseInt(data.getProperty("buildDelayTicks", "2")), 1, 20);
+            } catch (IOException | NumberFormatException exception) {
+                commandPrefix = "+";
+                maxBuildBlocks = 12000;
+                buildDelayTicks = 2;
+            }
+        }
+
+        static String handle(Minecraft client, String[] args) {
+            if (args.length < 2 || args[1].equalsIgnoreCase("show")) {
+                return "Einstellungen: Prefix='" + commandPrefix + "', max. " + maxBuildBlocks
+                        + " Bloecke, Bauintervall " + buildDelayTicks + " Tick(s). "
+                        + "Aendern: " + commandPrefix + "settings prefix <zeichen> | maxblocks <zahl> | speed <1-20>.";
+            }
+            try {
+                switch (args[1].toLowerCase(Locale.ROOT)) {
+                    case "prefix" -> {
+                        if (args.length < 3 || args[2].isBlank() || args[2].length() > 3
+                                || args[2].contains("/") || args[2].chars().anyMatch(Character::isWhitespace)) {
+                            return "Das Praefix muss 1-3 Zeichen haben, darf keine Leerzeichen oder '/' enthalten.";
+                        }
+                        commandPrefix = args[2];
+                    }
+                    case "maxblocks" -> {
+                        if (args.length < 3) return "Nutzung: " + commandPrefix + "settings maxblocks <100-50000>";
+                        maxBuildBlocks = clamp(Integer.parseInt(args[2]), 100, 50000);
+                    }
+                    case "speed" -> {
+                        if (args.length < 3) return "Nutzung: " + commandPrefix + "settings speed <1-20>";
+                        buildDelayTicks = clamp(Integer.parseInt(args[2]), 1, 20);
+                    }
+                    default -> {
+                        return "Optionen: prefix, maxblocks, speed oder show.";
+                    }
+                }
+                save(client);
+                return "Einstellungen gespeichert. " + handle(client, new String[]{"settings", "show"});
+            } catch (NumberFormatException exception) {
+                return "Bitte eine gueltige Zahl eingeben.";
+            }
+        }
+
+        private static void save(Minecraft client) {
+            if (client == null) return;
+            try {
+                Files.createDirectories(file(client).getParent());
+                Properties data = new Properties();
+                data.setProperty("prefix", commandPrefix);
+                data.setProperty("maxBlocks", Integer.toString(maxBuildBlocks));
+                data.setProperty("buildDelayTicks", Integer.toString(buildDelayTicks));
+                try (OutputStream output = Files.newOutputStream(file(client))) {
+                    data.store(output, "OfflineBuilder local settings");
+                }
+            } catch (IOException ignored) {
+                // The current session keeps the setting even when the file cannot be written.
+            }
         }
     }
 
@@ -1026,8 +1113,9 @@ public final class OfflineBuilderClient implements ClientModInitializer {
                 state = "Diese Form konnte nicht geplant werden.";
                 return;
             }
-            if (plan.size() > 12000) {
-                state = "Zu gross: maximal 12.000 Bloecke pro Bau.";
+            if (plan.size() > maxBuildBlocks) {
+                state = "Zu gross: maximal " + maxBuildBlocks + " Bloecke pro Bau. Aendere das Limit mit "
+                        + commandPrefix + "settings maxblocks <zahl>.";
                 return;
             }
             remaining.clear();
@@ -1049,7 +1137,7 @@ public final class OfflineBuilderClient implements ClientModInitializer {
                 return;
             }
             if (remaining.isEmpty() || paused) return;
-            if (++tickDelay < 2) return;
+            if (++tickDelay < buildDelayTicks) return;
             tickDelay = 0;
 
             BlockPos target = remaining.peek();
@@ -1184,7 +1272,7 @@ public final class OfflineBuilderClient implements ClientModInitializer {
         }
 
         private static void tickHistory(Minecraft client) {
-            if (++tickDelay < 2) return;
+            if (++tickDelay < buildDelayTicks) return;
             tickDelay = 0;
             BlockPos pos = historyQueue.poll();
             if (pos == null) {
