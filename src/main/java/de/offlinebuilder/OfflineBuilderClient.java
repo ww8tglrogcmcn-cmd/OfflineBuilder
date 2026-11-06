@@ -603,6 +603,10 @@ public final class OfflineBuilderClient implements ClientModInitializer {
                 state = "Ein Abbau laeuft bereits. Nutze +break cancel zum Stoppen.";
                 return;
             }
+            if (BuildEngine.isBusy()) {
+                state = "Erst den laufenden Bau oder Undo/Redo beenden.";
+                return;
+            }
             BlockHitResult hit = currentBlockHit(client);
             if (hit == null) {
                 state = "Schau zuerst auf einen Block.";
@@ -691,6 +695,10 @@ public final class OfflineBuilderClient implements ClientModInitializer {
             previousSlot = -1;
         }
 
+        static boolean isActive() {
+            return active;
+        }
+
         static String status() {
             return state;
         }
@@ -722,8 +730,12 @@ public final class OfflineBuilderClient implements ClientModInitializer {
                 state = "Du musst in einer Welt sein.";
                 return;
             }
-            if (!remaining.isEmpty()) {
-                state = "Es laeuft bereits ein Bauvorgang.";
+            if (BlockBreaker.isActive()) {
+                state = "Stoppe zuerst den laufenden Block-Abbau.";
+                return;
+            }
+            if (!remaining.isEmpty() || historyMode != HistoryMode.NONE) {
+                state = "Es laeuft bereits ein Bau- oder Undo/Redo-Vorgang.";
                 return;
             }
             BlockHitResult hit = currentBlockHit(client);
@@ -981,6 +993,10 @@ public final class OfflineBuilderClient implements ClientModInitializer {
             paused = false;
             state = message;
             restoreSelectedSlot(Minecraft.getInstance());
+        }
+
+        static boolean isBusy() {
+            return !remaining.isEmpty() || historyMode != HistoryMode.NONE;
         }
 
         static String status() {
