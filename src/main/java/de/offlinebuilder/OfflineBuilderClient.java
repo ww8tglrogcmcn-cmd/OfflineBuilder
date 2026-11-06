@@ -89,7 +89,7 @@ public final class OfflineBuilderClient implements ClientModInitializer {
         String trimmed = raw.trim();
         String[] args = trimmed.isEmpty() ? new String[0] : trimmed.split("\\s+");
         if (args.length == 0 || args[0].equalsIgnoreCase("help")) {
-            tell(client, "Befehle: +menu | +break [cancel] | +build wall/floor/house/cuboid/sphere/dome/cylinder/pyramid ... | +build pause/resume/cancel");
+            tell(client, "Befehle: +menu | +break [cancel] | +build wall/floor/house/pillar/stairs/bridge/arch/cuboid/sphere/dome/cylinder/pyramid ... | +build pause/resume/cancel");
             return;
         }
         if (args[0].equalsIgnoreCase("menu")) {
@@ -110,7 +110,7 @@ public final class OfflineBuilderClient implements ClientModInitializer {
             return;
         }
         if (args.length < 2) {
-            tell(client, "Nutzung: +build <wall|floor|house|cuboid|sphere|dome|cylinder|pyramid> ...");
+            tell(client, "Nutzung: +build <wall|floor|house|pillar|stairs|bridge|arch|cuboid|sphere|dome|cylinder|pyramid> ...");
             return;
         }
         String operation = args[1].toLowerCase(Locale.ROOT);
@@ -139,6 +139,10 @@ public final class OfflineBuilderClient implements ClientModInitializer {
             case "cylinder", "zylinder" -> shape = Shape.CYLINDER;
             case "pyramid", "pyramide" -> shape = Shape.PYRAMID;
             case "house", "haus" -> shape = Shape.HOUSE;
+            case "pillar", "saeule", "säule" -> shape = Shape.PILLAR;
+            case "stairs", "treppe", "treppen" -> shape = Shape.STAIRS;
+            case "bridge", "bruecke", "brücke" -> shape = Shape.BRIDGE;
+            case "arch", "bogen" -> shape = Shape.ARCH;
             default -> { tell(client, "Unbekannte Form: " + operation + ". Nutze +help."); return; }
         }
 
@@ -209,7 +213,11 @@ public final class OfflineBuilderClient implements ClientModInitializer {
         DOME("Kuppel"),
         CYLINDER("Zylinder"),
         PYRAMID("Pyramide"),
-        HOUSE("Haus");
+        HOUSE("Haus"),
+        PILLAR("Saeule"),
+        STAIRS("Treppe"),
+        BRIDGE("Bruecke"),
+        ARCH("Bogen");
 
         final String label;
         Shape(String label) { this.label = label; }
@@ -473,13 +481,59 @@ public final class OfflineBuilderClient implements ClientModInitializer {
                             if (height > 1) add(all, base, right, forward, x, height - 1, z);
                             for (int y = 1; y < height - 1; y++) {
                                 if (x == 0 || x == width - 1 || z == 0 || z == length - 1) {
-                                    // Leave a two-block-high doorway in the middle of the front wall.
                                     boolean doorway = z == 0 && x >= width / 2 - 1
                                             && x <= width / 2 && y <= 2;
                                     if (!doorway) add(all, base, right, forward, x, y, z);
                                 }
                             }
                         }
+                    }
+                }
+                case PILLAR -> {
+                    for (int y = 0; y < height; y++)
+                        for (int z = 0; z < length; z++)
+                            for (int x = 0; x < width; x++) {
+                                boolean edge = x == 0 || x == width - 1
+                                        || z == 0 || z == length - 1;
+                                if (!hollow || edge)
+                                    add(all, base, right, forward, x, y, z);
+                            }
+                }
+                case STAIRS -> {
+                    for (int z = 0; z < length; z++) {
+                        int level = Math.min(height - 1, (int) ((long) z * height / Math.max(1, length)));
+                        for (int y = 0; y <= level; y++)
+                            for (int x = 0; x < width; x++) {
+                                boolean edge = y == level || x == 0 || x == width - 1 || z == 0;
+                                if (!hollow || edge)
+                                    add(all, base, right, forward, x, y, z);
+                            }
+                    }
+                }
+                case BRIDGE -> {
+                    for (int z = 0; z < length; z++) {
+                        for (int x = 0; x < width; x++) {
+                            add(all, base, right, forward, x, 0, z);
+                            if (height > 1 && (x == 0 || x == width - 1)) {
+                                for (int y = 1; y < Math.min(height, 4); y++)
+                                    add(all, base, right, forward, x, y, z);
+                            }
+                        }
+                    }
+                }
+                case ARCH -> {
+                    int radius = Math.max(1, (width - 1) / 2);
+                    int springLine = Math.max(1, height - radius - 1);
+                    int center = (width - 1) / 2;
+                    for (int x = 0; x < width; x++) {
+                        for (int y = 0; y <= springLine; y++) {
+                            if (x == 0 || x == width - 1)
+                                add(all, base, right, forward, x, y, 0);
+                        }
+                        int dx = x - center;
+                        int arcY = springLine + (int) Math.round(Math.sqrt(
+                                Math.max(0, radius * radius - dx * dx)));
+                        add(all, base, right, forward, x, arcY, 0);
                     }
                 }
             }
